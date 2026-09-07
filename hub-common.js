@@ -95,7 +95,7 @@
     if (overlayEl) return overlayEl;
     overlayEl = document.createElement('div');
     overlayEl.id = 'loadOverlay';
-    overlayEl.innerHTML = '<div class="load-spinner"></div>';
+    overlayEl.innerHTML = '<div class="load-spinner"><img src="logo.png?v=10" alt="Loading"/></div>';
     function attach() { if (document.body && overlayEl.parentNode !== document.body) document.body.appendChild(overlayEl); }
     document.addEventListener('DOMContentLoaded', attach);
     attach();
