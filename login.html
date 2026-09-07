@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en" data-app="personal" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sign in — Successwa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Karla:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=41" />
+<link rel="icon" href="logo.png?v=9">
+<style>
+  body{min-height:100vh;display:grid;place-items:center;background:
+    radial-gradient(1200px 500px at 50% -10%, rgba(217,178,63,.10), transparent 60%), var(--bg)}
+  .auth-wrap{width:100%;max-width:420px;padding:22px}
+  .auth-logo{display:flex;justify-content:center;margin-bottom:22px}
+  .auth-logo img{height:52px}
+  .auth-card{
+    background:var(--surface);border:1px solid var(--border-soft);border-radius:16px;
+    padding:30px 30px 26px;box-shadow:0 12px 40px rgba(0,0,0,.14);
+    animation:modalIn .3s ease;
+  }
+  .auth-card h1{font-family:var(--serif);font-size:24px;font-weight:700;text-align:center}
+  .auth-card .sub{color:var(--muted);text-align:center;font-size:13.5px;margin-top:5px;margin-bottom:22px}
+  .auth-field{margin-bottom:14px}
+  .auth-field label{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:1px;
+    text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+  .auth-field input{
+    width:100%;padding:11px 13px;border-radius:9px;border:1px solid var(--border);
+    background:var(--surface-2);color:var(--text);font-size:14px;font-family:var(--sans);
+    transition:border-color .15s,box-shadow .15s;
+  }
+  .auth-field input:focus{outline:none;border-color:var(--green-text);box-shadow:0 0 0 3px var(--green-soft)}
+  .auth-msg{min-height:18px;font-size:13px;margin:4px 0 12px;text-align:center}
+  .auth-msg.err{color:var(--red)}
+  .auth-msg.ok{color:var(--ok)}
+  .auth-toggle{text-align:center;font-size:13.5px;color:var(--muted);margin-top:16px}
+  .auth-toggle a{color:var(--green-text);font-weight:600;cursor:pointer}
+  .btn-block{width:100%;justify-content:center;padding:12px}
+  .name-row{display:none}
+  body.mode-register .name-row{display:block}
+  body.mode-register .login-only{display:none}
+  body:not(.mode-register) .register-only{display:none}
+</style>
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-logo"><img src="logo.png?v=9" alt="Successwa" /></div>
+    <div class="auth-card">
+      <h1 id="authTitle">Welcome back</h1>
+      <p class="sub" id="authSub">Sign in to access your Successwa tax tools</p>
+
+      <form id="authForm" autocomplete="on">
+        <div class="auth-field name-row">
+          <label for="fName">Full name</label>
+          <input type="text" id="fName" placeholder="Jane Smith" autocomplete="name" />
+        </div>
+        <div class="auth-field">
+          <label for="fEmail">Email</label>
+          <input type="email" id="fEmail" placeholder="you@example.com" autocomplete="email" required />
+        </div>
+        <div class="auth-field">
+          <label for="fPass">Password</label>
+          <input type="password" id="fPass" placeholder="••••••••" autocomplete="current-password" required />
+        </div>
+
+        <div class="auth-msg" id="authMsg"></div>
+
+        <button type="submit" class="btn btn-primary btn-block" id="authSubmit">
+          <span class="login-only">Sign in</span>
+          <span class="register-only">Create account</span>
+        </button>
+      </form>
+
+      <p class="auth-toggle login-only">New to Successwa? <a id="toRegister">Create an account</a></p>
+      <p class="auth-toggle register-only">Already have an account? <a id="toLogin">Sign in</a></p>
+    </div>
+  </div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var body = document.body;
+
+  // If already logged in, skip to the correct home for the role.
+  function homeFor(role) { return role === 'client' ? 'portal.html' : 'dashboard.html'; }
+  try {
+    var saved = JSON.parse(localStorage.getItem('successwa.auth') || 'null');
+    if (saved && saved.email && saved.token) location.href = homeFor(saved.role);
+  } catch (e) {}
+
+  function setMode(register) {
+    body.classList.toggle('mode-register', register);
+    $('authTitle').textContent = register ? 'Create your account' : 'Welcome back';
+    $('authSub').textContent = register
+      ? 'Start tracking your Australian tax records'
+      : 'Sign in to access your Successwa tax tools';
+    $('fPass').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
+    msg('', '');
+  }
+  function msg(text, cls) {
+    var m = $('authMsg'); m.textContent = text; m.className = 'auth-msg ' + (cls || '');
+  }
+
+  $('toRegister').addEventListener('click', function () { setMode(true); });
+  $('toLogin').addEventListener('click', function () { setMode(false); });
+
+  $('authForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var register = body.classList.contains('mode-register');
+    var email = $('fEmail').value.trim().toLowerCase();
+    var password = $('fPass').value;
+    var name = $('fName').value.trim();
+    var btn = $('authSubmit');
+    btn.disabled = true;
+    msg(register ? 'Creating account…' : 'Signing in…', '');
+
+    var url = register ? '/api/register' : '/api/login';
+    var payload = register ? { email: email, name: name, password: password }
+                           : { email: email, password: password };
+
+    fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.j.error || 'Something went wrong');
+        localStorage.setItem('successwa.auth', JSON.stringify({
+          email: res.j.email, name: res.j.name || '', role: res.j.role || 'client', token: res.j.token
+        }));
+        msg('Success — redirecting…', 'ok');
+        setTimeout(function () { location.href = homeFor(res.j.role || 'client'); }, 500);
+      }).catch(function (err) {
+        msg(err.message, 'err');
+        btn.disabled = false;
+      });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "name": "successwa",
+  "version": "1.0.0",
+  "description": "",
+  "main": "business.js",
+  "scripts": {
+    "start": "node server.js",
+    "db:init": "node db/init.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "compression": "^1.8.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "multer": "^2.3.0",
+    "nodemailer": "^10.0.0",
+    "pg": "^8.23.0"
+  }
+}

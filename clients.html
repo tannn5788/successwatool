@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Clients — Successwa Client Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Karla:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=41" />
+<link rel="icon" href="logo.png?v=10">
+</head>
+<body>
+  <div id="topnav"></div>
+  <main class="hub">
+    <div class="hub-head">
+      <div><h1>Clients &amp; Entities</h1><p class="page-sub">Manage clients, their entities and create jobs</p></div>
+      <button class="btn btn-primary" id="newClientBtn">+ New Client</button>
+    </div>
+    <div class="hub-toolbar">
+      <input type="search" id="q" placeholder="Search client name, email or ID…" style="min-width:260px" />
+    </div>
+    <div id="listWrap"><p class="muted">Loading…</p></div>
+  </main>
+<script src="nav.js?v=19"></script>
+<script src="hub-common.js?v=39"></script>
+<script src="clients.js?v=39"></script>
+</body>
+</html>
