@@ -923,6 +923,16 @@ app.get('/api/admin/audit', requireAuth, requireRole('administrator', 'superviso
 });
 
 // ================= CLIENT PORTAL =================
+// Builds a client-facing "next action" message that matches the job's real situation.
+// - If documents are still outstanding -> ask to upload them.
+// - If the job is awaiting the client's signature -> ask to review & sign.
+// - Otherwise no action is required from the client.
+function portalNextAction(job, view, outstanding) {
+  if (outstanding > 0) return 'Please upload the requested documents.';
+  if (job.stage === '06_awaiting_signature' && !job.on_hold) return 'Please review and sign your documents.';
+  return '';
+}
+
 // Returns only the client's own jobs with client-safe status (never internal notes).
 app.get('/api/portal/jobs', requireAuth, requireRole('client'), async (req, res) => {
   try {
@@ -941,7 +951,7 @@ app.get('/api/portal/jobs', requireAuth, requireRole('client'), async (req, res)
         id: j.id, jobType: j.job_type, financialYear: j.financial_year, entityName: j.entity_name,
         clientStatus: view.clientStatus, clientMessage: view.clientMessage, progressPct: view.progressPct,
         lastUpdate: j.updated_at, outstanding: rem.rows[0].n,
-        nextAction: view.clientStatus === 'Action Required' ? 'Please upload the requested documents.' : '',
+        nextAction: portalNextAction(j, view, rem.rows[0].n),
       });
     }
     res.json({ ok: true, clientId, jobs });
