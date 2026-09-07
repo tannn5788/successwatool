@@ -52,8 +52,21 @@ function verifyPassword(password, salt, expectedHash) {
 const app = express();
 app.use(compression()); // gzip HTML/JS/CSS/JSON responses
 app.use(express.json({ limit: '20mb' }));
+
+// Pretty URLs: redirect /foo.html -> /foo (keep the query string), so the
+// address bar never shows the .html extension. Internal links still use .html
+// and simply get redirected here.
+app.use(function (req, res, next) {
+  if (req.method === 'GET' && /\.html$/i.test(req.path)) {
+    var clean = req.path.replace(/\.html$/i, '');
+    var qs = req.originalUrl.slice(req.path.length); // preserves ?job=... etc.
+    return res.redirect(302, clean + qs);
+  }
+  next();
+});
 app.use(express.static(__dirname, {
   etag: true,
+  extensions: ['html'], // /dashboard -> dashboard.html
   setHeaders: function (res, filePath) {
     // HTML must always revalidate (so ?v= bumps + content changes show immediately).
     // Other assets (js/css/png) are cache-busted via ?v= query, so cache them hard.
