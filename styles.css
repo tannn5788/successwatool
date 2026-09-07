@@ -107,9 +107,9 @@ svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-wid
   color:var(--text);font-weight:500;cursor:pointer;
 }
 .status-pill{
-  display:flex;align-items:center;gap:8px;padding:0 6px 0 11px;
+  display:flex;align-items:center;gap:8px;padding:0 12px;
   border:1px solid var(--border);background:var(--surface);
-  color:var(--text-2);min-width:210px;justify-content:space-between;
+  color:var(--text-2);
 }
 .status-pill.compact{min-width:auto;padding:0 11px;gap:7px;font-size:12px}
 .status-pill .status-text{font-size:12.5px;white-space:nowrap}
