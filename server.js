@@ -64,6 +64,8 @@ app.use(function (req, res, next) {
   }
   next();
 });
+// Root -> login (there is no index.html; avoid Express "Cannot GET /").
+app.get('/', function (req, res) { res.redirect(302, '/login'); });
 app.use(express.static(__dirname, {
   etag: true,
   extensions: ['html'], // /dashboard -> dashboard.html
