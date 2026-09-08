@@ -95,8 +95,8 @@ svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-wid
 .topbar .status-pill .status-text,.topbar .status-pill .mono{color:rgba(255,255,255,.82)}
 .topbar .btn-ghost{color:rgba(255,255,255,.88);border-color:rgba(255,255,255,.16);background:transparent}
 .topbar .btn-ghost:hover{background:rgba(255,255,255,.10);color:#fff}
-.topbar .btn-icon{color:rgba(255,255,255,.88)}
-.topbar .btn-icon:hover{background:rgba(255,255,255,.10);color:#fff}
+.topbar .btn-icon{color:rgba(255,255,255,.88);background:transparent;border:1px solid rgba(255,255,255,.16)}
+.topbar .btn-icon:hover{background:rgba(255,255,255,.10);color:#fff;border-color:rgba(255,255,255,.28)}
 .brand{display:flex;align-items:center;gap:11px}
 .brand-logo{height:38px;width:auto;display:block}
 .brand-mark{
