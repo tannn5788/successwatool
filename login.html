@@ -10,71 +10,171 @@
 <link rel="stylesheet" href="styles.css?v=45" />
 <link rel="icon" href="logo.png?v=9">
 <style>
-  body{min-height:100vh;display:grid;place-items:center;background:
-    radial-gradient(1200px 500px at 50% -10%, rgba(217,178,63,.10), transparent 60%), var(--bg)}
-  .auth-wrap{width:100%;max-width:420px;padding:22px}
-  .auth-logo{display:flex;justify-content:center;margin-bottom:22px}
-  .auth-logo img{height:52px}
-  .auth-card{
-    background:var(--surface);border:1px solid var(--border-soft);border-radius:16px;
-    padding:30px 30px 26px;box-shadow:0 12px 40px rgba(0,0,0,.14);
-    animation:modalIn .3s ease;
+  /* Hallmark · redesign: login · genre: editorial · theme: project (black/red/brass)
+   * macrostructure: 15 split-studio · nav: none (auth) · foundations: locked tokens
+   * pre-emit critique: P5 H5 E4 S4 R5 V4 · contrast: pass
+   * Asymmetric split-screen; brand panel biased left, form right-aligned copy.
+   */
+  html,body{overflow-x:clip}
+  body{min-height:100vh;background:var(--bg)}
+
+  .auth-shell{
+    min-height:100vh;display:grid;
+    grid-template-columns:1.05fr 0.95fr;
   }
-  .auth-card h1{font-family:var(--serif);font-size:24px;font-weight:700;text-align:center}
-  .auth-card .sub{color:var(--muted);text-align:center;font-size:13.5px;margin-top:5px;margin-bottom:22px}
-  .auth-field{margin-bottom:14px}
+
+  /* ---- Left: editorial brand panel (fixed dark ink for guaranteed contrast) ---- */
+  .auth-brand{
+    --ink:#100e0d;--ink-2:#1c1917;--line:#2f2825;
+    --paper:#f3eee6;--dim:#a99f92;--brass:#d9b23f;--rust:#e0574a;
+    position:relative;background:var(--ink);color:var(--paper);
+    padding:clamp(28px,4vw,56px);
+    display:flex;flex-direction:column;justify-content:space-between;gap:40px;
+    overflow:hidden;
+  }
+  /* Hairline rule that runs the height, anchoring the type to a margin */
+  .auth-brand::before{
+    content:"";position:absolute;top:0;bottom:0;left:clamp(28px,4vw,56px);
+    width:1px;background:var(--line);opacity:.6;
+  }
+  .auth-brand__top,.auth-brand__mid,.auth-brand__foot{position:relative;padding-left:26px}
+
+  .auth-brand__mark{display:flex;align-items:center;gap:12px}
+  .auth-brand__mark img{height:30px;display:block}
+  .auth-brand__mark span{
+    font-family:var(--mono);font-size:11px;letter-spacing:2.5px;
+    text-transform:uppercase;color:var(--dim)}
+
+  .auth-brand__lede{
+    font-family:var(--serif);font-weight:700;font-style:normal;
+    font-size:clamp(30px,3.6vw,46px);line-height:1.02;letter-spacing:-.02em;
+    max-width:12ch}
+  .auth-brand__lede em{font-style:normal;color:var(--brass)}
+  .auth-brand__say{margin-top:16px;max-width:34ch;color:var(--dim);
+    font-size:14.5px;line-height:1.6}
+
+  /* Index-style capability list — newspaper register, numbered */
+  .auth-index{list-style:none;margin-top:26px;border-top:1px solid var(--line)}
+  .auth-index li{
+    display:grid;grid-template-columns:2.4rem 1fr;align-items:baseline;gap:10px;
+    padding:11px 0;border-bottom:1px solid var(--line)}
+  .auth-index .n{font-family:var(--mono);font-size:11px;color:var(--brass);
+    letter-spacing:1px}
+  .auth-index .t{font-size:14px;color:var(--paper)}
+  .auth-index .t small{display:block;color:var(--dim);font-size:12.5px;margin-top:2px}
+
+  .auth-brand__foot{
+    font-family:var(--mono);font-size:11px;letter-spacing:.5px;color:var(--dim);
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .auth-brand__foot .rust{color:var(--rust)}
+
+  /* ---- Right: the form, copy left-aligned (breaks the centered-card tell) ---- */
+  .auth-form-col{
+    display:flex;align-items:center;
+    padding:clamp(28px,5vw,72px);background:var(--surface)}
+  .auth-card{width:100%;max-width:400px;animation:modalIn .3s ease}
+  .auth-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:2px;
+    text-transform:uppercase;color:var(--green-text)}
+  .auth-card h1{font-family:var(--serif);font-size:27px;font-weight:700;
+    letter-spacing:-.01em;margin-top:10px}
+  .auth-card .sub{color:var(--muted);font-size:13.5px;margin-top:6px;margin-bottom:26px}
+
+  .auth-field{margin-bottom:15px}
   .auth-field label{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:1px;
     text-transform:uppercase;color:var(--muted);margin-bottom:6px}
   .auth-field input{
-    width:100%;padding:11px 13px;border-radius:9px;border:1px solid var(--border);
+    width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);
     background:var(--surface-2);color:var(--text);font-size:14px;font-family:var(--sans);
     transition:border-color .15s,box-shadow .15s;
   }
   .auth-field input:focus{outline:none;border-color:var(--green-text);box-shadow:0 0 0 3px var(--green-soft)}
-  .auth-msg{min-height:18px;font-size:13px;margin:4px 0 12px;text-align:center}
+  .auth-msg{min-height:18px;font-size:13px;margin:4px 0 14px}
   .auth-msg.err{color:var(--red)}
   .auth-msg.ok{color:var(--ok)}
-  .auth-toggle{text-align:center;font-size:13.5px;color:var(--muted);margin-top:16px}
+  .auth-toggle{font-size:13.5px;color:var(--muted);margin-top:18px}
   .auth-toggle a{color:var(--green-text);font-weight:600;cursor:pointer}
-  .btn-block{width:100%;justify-content:center;padding:12px}
+  .btn-block{width:100%;justify-content:center;padding:13px}
   .name-row{display:none}
   body.mode-register .name-row{display:block}
   body.mode-register .login-only{display:none}
   body:not(.mode-register) .register-only{display:none}
+
+  /* ---- Responsive: brand panel collapses to a compact masthead ---- */
+  @media (max-width:860px){
+    .auth-shell{grid-template-columns:1fr}
+    .auth-brand{gap:22px;padding:24px 22px}
+    .auth-brand::before{display:none}
+    .auth-brand__top,.auth-brand__mid,.auth-brand__foot{padding-left:0}
+    .auth-index,.auth-brand__foot,.auth-brand__say{display:none}
+    .auth-brand__lede{font-size:clamp(24px,7vw,32px);max-width:none}
+    .auth-form-col{padding:28px 22px 44px}
+    .auth-card{max-width:none}
+  }
+  @media (prefers-reduced-motion:reduce){.auth-card{animation:none}}
 </style>
 </head>
 <body>
-  <div class="auth-wrap">
-    <div class="auth-logo"><img src="logo.png?v=9" alt="Successwa" /></div>
-    <div class="auth-card">
-      <h1 id="authTitle">Welcome back</h1>
-      <p class="sub" id="authSub">Sign in to access your Successwa tax tools</p>
+  <div class="auth-shell">
 
-      <form id="authForm" autocomplete="on">
-        <div class="auth-field name-row">
-          <label for="fName">Full name</label>
-          <input type="text" id="fName" placeholder="Jane Smith" autocomplete="name" />
+    <!-- LEFT — editorial brand panel -->
+    <aside class="auth-brand">
+      <div class="auth-brand__top">
+        <div class="auth-brand__mark">
+          <img src="logo.png?v=9" alt="Successwa" />
+          <span>Client Hub</span>
         </div>
-        <div class="auth-field">
-          <label for="fEmail">Email</label>
-          <input type="email" id="fEmail" placeholder="you@example.com" autocomplete="email" required />
-        </div>
-        <div class="auth-field">
-          <label for="fPass">Password</label>
-          <input type="password" id="fPass" placeholder="••••••••" autocomplete="current-password" required />
-        </div>
+      </div>
 
-        <div class="auth-msg" id="authMsg"></div>
+      <div class="auth-brand__mid">
+        <h2 class="auth-brand__lede">Your tax records, <em>kept in order.</em></h2>
+        <p class="auth-brand__say">One place for your accountant and you — documents, job progress, and every request tracked from lodged to signed.</p>
 
-        <button type="submit" class="btn btn-primary btn-block" id="authSubmit">
-          <span class="login-only">Sign in</span>
-          <span class="register-only">Create account</span>
-        </button>
-      </form>
+        <ol class="auth-index">
+          <li><span class="n">01</span><span class="t">Track every job<small>See exactly where each return sits, in real time.</small></span></li>
+          <li><span class="n">02</span><span class="t">Share documents securely<small>Upload once — your firm sees it instantly.</small></span></li>
+          <li><span class="n">03</span><span class="t">Review &amp; sign<small>Approve finished work without the email chase.</small></span></li>
+        </ol>
+      </div>
 
-      <p class="auth-toggle login-only">New to Successwa? <a id="toRegister">Create an account</a></p>
-      <p class="auth-toggle register-only">Already have an account? <a id="toLogin">Sign in</a></p>
-    </div>
+      <div class="auth-brand__foot">
+        <span>Elite Tax &amp; Wealth Advisory</span>
+        <span class="rust">Successwa</span>
+      </div>
+    </aside>
+
+    <!-- RIGHT — the form -->
+    <main class="auth-form-col">
+      <div class="auth-card">
+        <p class="auth-eyebrow" id="authEyebrow">Sign in</p>
+        <h1 id="authTitle">Welcome back</h1>
+        <p class="sub" id="authSub">Sign in to access your Successwa tax tools</p>
+
+        <form id="authForm" autocomplete="on">
+          <div class="auth-field name-row">
+            <label for="fName">Full name</label>
+            <input type="text" id="fName" placeholder="Jane Smith" autocomplete="name" />
+          </div>
+          <div class="auth-field">
+            <label for="fEmail">Email</label>
+            <input type="email" id="fEmail" placeholder="you@example.com" autocomplete="email" required />
+          </div>
+          <div class="auth-field">
+            <label for="fPass">Password</label>
+            <input type="password" id="fPass" placeholder="••••••••" autocomplete="current-password" required />
+          </div>
+
+          <div class="auth-msg" id="authMsg"></div>
+
+          <button type="submit" class="btn btn-primary btn-block" id="authSubmit">
+            <span class="login-only">Sign in</span>
+            <span class="register-only">Create account</span>
+          </button>
+        </form>
+
+        <p class="auth-toggle login-only">New to Successwa? <a id="toRegister">Create an account</a></p>
+        <p class="auth-toggle register-only">Already have an account? <a id="toLogin">Sign in</a></p>
+      </div>
+    </main>
   </div>
 
 <script>
@@ -92,6 +192,7 @@
   function setMode(register) {
     body.classList.toggle('mode-register', register);
     $('authTitle').textContent = register ? 'Create your account' : 'Welcome back';
+    $('authEyebrow').textContent = register ? 'Get started' : 'Sign in';
     $('authSub').textContent = register
       ? 'Start tracking your Australian tax records'
       : 'Sign in to access your Successwa tax tools';
