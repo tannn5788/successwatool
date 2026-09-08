@@ -239,6 +239,7 @@
         var p = JSON.parse(raw);
         if (p && p.entries && p.statements) {
           p.settings = Object.assign(seed().settings, p.settings || {});
+          p.settings.theme = 'light'; // Tax Tracker always defaults to light.
           p.taxDetails = p.taxDetails || {};
           p.business = p.business || {};
           return p;
