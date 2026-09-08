@@ -83,10 +83,20 @@ svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-wid
   height:57px;
   display:flex;align-items:center;justify-content:space-between;
   gap:16px;padding:0 18px;
-  background:var(--sidebar);
-  border-bottom:1px solid var(--border);
+  background:#111418;
+  border-bottom:1px solid rgba(255,255,255,.10);
   position:sticky;top:0;z-index:40;
 }
+/* Light-on-dark controls inside the black Tax Tracker masthead */
+.topbar .brand-sub{color:rgba(255,255,255,.62);border-left-color:rgba(255,255,255,.16)}
+.topbar .brand-name{color:#fff}
+.topbar .fy-select{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.16);color:#fff}
+.topbar .status-pill{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.14);color:rgba(255,255,255,.82)}
+.topbar .status-pill .status-text,.topbar .status-pill .mono{color:rgba(255,255,255,.82)}
+.topbar .btn-ghost{color:rgba(255,255,255,.88);border-color:rgba(255,255,255,.16);background:transparent}
+.topbar .btn-ghost:hover{background:rgba(255,255,255,.10);color:#fff}
+.topbar .btn-icon{color:rgba(255,255,255,.88)}
+.topbar .btn-icon:hover{background:rgba(255,255,255,.10);color:#fff}
 .brand{display:flex;align-items:center;gap:11px}
 .brand-logo{height:38px;width:auto;display:block}
 .brand-mark{
