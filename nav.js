@@ -75,7 +75,11 @@
     var el = document.getElementById('topnav');
     if (!el) return;
     var html = '<div class="nav-inner">' +
-      '<a class="nav-brand" href="' + homeFor(a.role) + '"><img src="logo.png?v=10" alt="Successwa"/></a>' +
+      '<a class="nav-brand" href="' + homeFor(a.role) + '">' +
+        '<img src="logo.png?v=10" alt="Successwa"/>' +
+        '<span class="nav-brand__sep" aria-hidden="true"></span>' +
+        '<span class="nav-brand__label">Client Hub</span>' +
+      '</a>' +
       '<nav class="nav-links">';
     links.forEach(function (l) {
       var isReview = l[0] === 'review.html';
