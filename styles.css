@@ -144,20 +144,21 @@ svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-wid
   display:inline-flex;align-items:center;justify-content:center;gap:7px;
   height:38px;padding:0 18px;border:1px solid transparent;border-radius:7px;cursor:pointer;
   font-weight:600;font-size:13.5px;letter-spacing:.2px;
-  transition:background var(--dur-micro) var(--ease-out),border-color var(--dur-micro) var(--ease-out),color var(--dur-micro) var(--ease-out),transform var(--dur-micro) var(--ease-out);
+  transition:background var(--dur-short) var(--ease-out),border-color var(--dur-short) var(--ease-out),color var(--dur-short) var(--ease-out),transform var(--dur-short) var(--ease-out),box-shadow var(--dur-short) var(--ease-out);
   white-space:nowrap;
 }
-.btn-primary{background:var(--green);color:#fff;font-weight:600;box-shadow:none}
-.btn-primary:hover{background:var(--green-hover);transform:translateY(-1px)}
-.btn-primary:active{transform:translateY(0)}
+.btn-primary{background:var(--green);color:#fff;font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.btn-primary:hover{background:var(--green-hover);transform:translateY(-2px);box-shadow:0 8px 18px rgba(192,31,46,.28)}
+.btn-primary:active{transform:translateY(0);box-shadow:0 1px 2px rgba(0,0,0,.12)}
 .btn-outline{background:transparent;border-color:var(--text);color:var(--text)}
-.btn-outline:hover{background:var(--text);border-color:var(--text);color:var(--surface);transform:translateY(-1px)}
-.btn-outline:active{transform:translateY(0)}
+.btn-outline:hover{background:var(--text);border-color:var(--text);color:var(--surface);transform:translateY(-2px);box-shadow:0 8px 18px rgba(0,0,0,.14)}
+.btn-outline:active{transform:translateY(0);box-shadow:none}
 .btn-ghost{background:transparent;border-color:var(--border);color:var(--text-2)}
-.btn-ghost:hover{background:var(--surface-2);color:var(--text);transform:translateY(-1px)}
-.btn-ghost:active{transform:translateY(0)}
+.btn-ghost:hover{background:var(--surface-2);color:var(--text);transform:translateY(-2px);box-shadow:0 6px 14px rgba(0,0,0,.10)}
+.btn-ghost:active{transform:translateY(0);box-shadow:none}
 .btn-icon{width:38px;padding:0;border-radius:7px;background:var(--surface);border-color:var(--border);color:var(--text-2)}
-.btn-icon:hover{background:var(--surface-2)}
+.btn-icon:hover{background:var(--surface-2);transform:translateY(-2px)}
+.btn-icon:active{transform:translateY(0)}
 .btn-block{width:100%}
 .btn-sm{height:32px;padding:0 13px;font-size:13px;border-radius:6px}
 .btn-xs{
@@ -576,7 +577,7 @@ tr.row-selected td{background:var(--green-soft)}
 .stat-card,.card{transition:box-shadow .16s ease,border-color .16s ease}
 .stat-card:hover,.card:hover{box-shadow:0 6px 18px rgba(0,0,0,.10)}
 
-.btn{transition:background var(--dur-micro) var(--ease-out),border-color var(--dur-micro) var(--ease-out),color var(--dur-micro) var(--ease-out),transform var(--dur-micro) var(--ease-out)}
+.btn{transition:background var(--dur-short) var(--ease-out),border-color var(--dur-short) var(--ease-out),color var(--dur-short) var(--ease-out),transform var(--dur-short) var(--ease-out),box-shadow var(--dur-short) var(--ease-out)}
 .btn:disabled{opacity:.55;cursor:default;transform:none}
 
 .side-item{transition:background .13s,color .13s,transform .1s ease}
