@@ -90,7 +90,8 @@ svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-wid
 /* Light-on-dark controls inside the black Tax Tracker masthead */
 .topbar .brand-sub{color:rgba(255,255,255,.62);border-left-color:rgba(255,255,255,.16)}
 .topbar .brand-name{color:#fff}
-.topbar .fy-select{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.16);color:#fff}
+.topbar .fy-select{background:#1c2027;border-color:rgba(255,255,255,.16);color:#fff}
+.topbar .fy-select option{background:#1c2027;color:#fff}
 .topbar .status-pill{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.14);color:rgba(255,255,255,.82)}
 .topbar .status-pill .status-text,.topbar .status-pill .mono{color:rgba(255,255,255,.82)}
 .topbar .btn-ghost{color:rgba(255,255,255,.88);border-color:rgba(255,255,255,.16);background:transparent}
