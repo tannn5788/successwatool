@@ -26,7 +26,7 @@
     panel.innerHTML = '<p class="muted">Loading…</p>';
     Nav.api('/api/admin/users').then(function (res) {
       var rows = res.users.map(function (u) {
-        var roleSel = '<select data-role="' + esc(u.email) + '">' + ROLES.map(function (r) {
+        var roleSel = '<select class="role-select" data-role="' + esc(u.email) + '">' + ROLES.map(function (r) {
           return '<option' + (r === u.role ? ' selected' : '') + '>' + r + '</option>'; }).join('') + '</select>';
         var isSelf = u.email.toLowerCase() === auth.email.toLowerCase();
         return '<tr><td>' + esc(u.name || '') + '<br><span class="muted small">' + esc(u.email) + '</span></td>' +

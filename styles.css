@@ -661,6 +661,16 @@ tr.row-selected td{background:var(--green-soft)}
 .hub-table td strong{font-family:var(--serif);font-weight:600;font-size:15px;letter-spacing:-.01em}
 /* The dashboard/clients tables sit flush on the page now — drop the card wrapper's chrome. */
 .card:has(> .hub-table){border:none;padding:0;background:transparent}
+/* Admin role dropdown — editorial select instead of raw browser chrome. */
+.role-select{appearance:none;-webkit-appearance:none;
+  font-family:var(--mono);font-size:11px;letter-spacing:.6px;text-transform:uppercase;font-weight:600;
+  color:var(--text);background:var(--surface);cursor:pointer;
+  border:1px solid var(--border);border-radius:6px;padding:6px 30px 6px 11px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' fill='none' stroke='%23948a7e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat:no-repeat;background-position:right 10px center;
+  transition:border-color .13s,box-shadow .13s,background .13s}
+.role-select:hover{border-color:var(--green-text)}
+.role-select:focus{outline:none;border-color:var(--green-text);box-shadow:0 0 0 3px var(--green-soft)}
 
 .pill{display:inline-block;padding:3px 9px;border-radius:4px;font-family:var(--mono);font-size:10px;font-weight:600;
   letter-spacing:.8px;text-transform:uppercase;white-space:nowrap}
