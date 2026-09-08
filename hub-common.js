@@ -107,14 +107,14 @@
     clearTimeout(hideTimer);
     barEl.classList.remove('done');
     barEl.classList.add('active');
-    // Show the centered overlay only if the request takes longer than ~150ms
-    // (avoids a distracting flash on fast calls).
+    // Show the centered overlay only if the request takes longer than ~450ms
+    // (avoids a distracting flash on the many sub-300ms API calls).
     ensureOverlay();
     if (!showTimer) {
       showTimer = setTimeout(function () {
         showTimer = null;
         if (inflight > 0) overlayEl.classList.add('active');
-      }, 150);
+      }, 450);
     }
   }
   function barStop() {
