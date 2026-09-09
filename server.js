@@ -469,6 +469,28 @@ app.post('/api/jobs/:id/flags', requireAuth, requireRole.apply(null, STAFF), asy
   finally { client.release(); }
 });
 
+// DELETE /api/jobs/:id — permanently delete a job. Administrator only (destructive).
+// Child rows (history, documents, doc_requests) are removed via ON DELETE CASCADE;
+// notifications.job_id is set NULL. We also delete the physical uploaded files.
+app.delete('/api/jobs/:id', requireAuth, requireRole('administrator'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const jr = await client.query('SELECT id FROM jobs WHERE id=$1 FOR UPDATE', [req.params.id]);
+    if (!jr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'job not found' }); }
+    // Collect stored files to unlink from disk after the row is gone.
+    const docs = await client.query('SELECT stored_path FROM documents WHERE job_id=$1', [req.params.id]);
+    await audit(client, req.user.email, 'job.delete', 'job', req.params.id, { documents: docs.rows.length });
+    await client.query('DELETE FROM jobs WHERE id=$1', [req.params.id]);
+    await client.query('COMMIT');
+    // Best-effort disk cleanup (never fails the request).
+    docs.rows.forEach((d) => { try { if (d.stored_path) fs.unlinkSync(path.join(UPLOAD_DIR, d.stored_path)); } catch (e) {} });
+    res.json({ ok: true });
+  } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
+  finally { client.release(); }
+});
+
+
 // Verify an email holds an allowed role before assigning it. Returns an error string or null.
 async function validateAssignment(accEmail, supEmail) {
   if (accEmail) {

@@ -181,6 +181,9 @@ svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-wid
 .btn-xs:hover{background:var(--green-soft);color:var(--green-text);border-color:var(--green-text)}
 .btn-xs.danger:hover{background:#fbeceb;color:var(--red);border-color:var(--red)}
 [data-theme="dark"] .btn-xs.danger:hover{background:#3a1f1c}
+/* General danger button (delete actions) */
+.btn.danger{background:var(--red);border-color:var(--red);color:#fff}
+.btn.danger:hover{background:#9a2f24;border-color:#9a2f24;color:#fff}
 
 /* ================= Shell / sidebar ================= */
 .shell{display:flex;align-items:stretch;min-height:calc(100vh - 57px - 54px)}

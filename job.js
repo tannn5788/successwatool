@@ -90,6 +90,7 @@
         (canAssign ? '<button class="btn btn-outline btn-sm" id="assignBtn" data-tip="Change the accountant or supervisor assigned to this job. Newly assigned staff get a notification.">Reassign staff</button>' : '') +
         (j.action_required && !j.on_hold ? '<span class="flag flag-action">ACTION REQUIRED</span><span class="muted small">Client has outstanding document requests</span>' : '') +
         (isSup && j.stage === '05_supervisor_review' ? '<button class="btn btn-primary btn-sm" id="approveBtn" data-tip="Approve the work and move the job to the client signature stage.">Approve → Signature</button><button class="btn btn-ghost btn-sm" id="returnBtn" data-tip="Send the job back to the accountant with a required reason.">Return to accountant</button>' : '') +
+        (auth.role === 'administrator' ? '<button class="btn btn-sm danger" id="delJobBtn" style="margin-left:auto" data-tip="Permanently delete this job and all its documents, requests and history. This cannot be undone.">Delete job</button>' : '') +
       '</div>' +
       '<p class="muted small" style="margin-top:8px">Tip: "Action Required" turns on automatically when you request documents below, and clears once all are received.</p></div>' +
 
@@ -139,6 +140,20 @@
     $('holdBtn').addEventListener('click', function () {
       Nav.api('/api/jobs/' + jobId + '/flags', { method: 'POST', body: { onHold: !j.on_hold } })
         .then(function () { Hub.toast('Updated'); load(); }).catch(function (e) { Hub.toast(e.message); });
+    });
+    if ($('delJobBtn')) $('delJobBtn').addEventListener('click', function () {
+      var m = Hub.modal('Delete job ' + j.id,
+        '<p class="muted small">This permanently deletes <b>' + esc(j.id) + '</b> and all of its documents, document requests and history. Notifications are kept but detached. <b>This cannot be undone.</b></p>' +
+        '<div class="field"><label>Type the job ID (<b>' + esc(j.id) + '</b>) to confirm</label><input id="delConfirm" placeholder="' + esc(j.id) + '" autocomplete="off"/></div>' +
+        '<div class="modal-actions"><button class="btn btn-ghost" id="delCancel">Cancel</button><button class="btn danger" id="delDo">Delete job</button></div>');
+      m.q('#delConfirm').focus();
+      m.q('#delCancel').addEventListener('click', m.close);
+      m.q('#delDo').addEventListener('click', function () {
+        if (m.q('#delConfirm').value.trim().toUpperCase() !== String(j.id).toUpperCase()) { Hub.toast('Job ID does not match'); return; }
+        Hub.busy(m.q('#delDo'), Nav.api('/api/jobs/' + jobId, { method: 'DELETE' }))
+          .then(function () { m.close(); Hub.toast('Job deleted'); location.href = 'dashboard.html'; })
+          .catch(function (e) { Hub.toast(e.message); });
+      });
     });
     if ($('assignBtn')) $('assignBtn').addEventListener('click', function () { assignModal(j); });
     if ($('approveBtn')) $('approveBtn').addEventListener('click', function () {
