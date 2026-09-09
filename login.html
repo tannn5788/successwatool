@@ -3,16 +3,16 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Sign in — Successwa</title>
+<title>Sign in â€” Successwa</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Archivo:wght@500;600;700;800&family=Karla:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css?v=61" />
 <link rel="icon" href="logo.png?v=9">
 <style>
-  /* Hallmark · redesign: login · genre: editorial · theme: project (black/red/brass)
-   * macrostructure: 15 split-studio · nav: none (auth) · foundations: locked tokens
-   * pre-emit critique: P5 H5 E4 S4 R5 V4 · contrast: pass
+  /* Hallmark Â· redesign: login Â· genre: editorial Â· theme: project (black/red/brass)
+   * macrostructure: 15 split-studio Â· nav: none (auth) Â· foundations: locked tokens
+   * pre-emit critique: P5 H5 E4 S4 R5 V4 Â· contrast: pass
    * Asymmetric split-screen; brand panel biased left, form right-aligned copy.
    */
   html,body{overflow-x:clip}
@@ -53,7 +53,7 @@
   .auth-brand__say{margin-top:16px;max-width:34ch;color:var(--dim);
     font-size:14.5px;line-height:1.6}
 
-  /* Index-style capability list — newspaper register, numbered */
+  /* Index-style capability list â€” newspaper register, numbered */
   .auth-index{list-style:none;margin-top:26px;border-top:1px solid var(--line)}
   .auth-index li{
     display:grid;grid-template-columns:2.4rem 1fr;align-items:baseline;gap:10px;
@@ -116,7 +116,7 @@
 <body>
   <div class="auth-shell">
 
-    <!-- LEFT — editorial brand panel -->
+    <!-- LEFT â€” editorial brand panel -->
     <aside class="auth-brand">
       <div class="auth-brand__top">
         <div class="auth-brand__mark">
@@ -127,11 +127,11 @@
 
       <div class="auth-brand__mid">
         <h2 class="auth-brand__lede">Your tax records, <em>kept in order.</em></h2>
-        <p class="auth-brand__say">One place for your accountant and you — documents, job progress, and every request tracked from lodged to signed.</p>
+        <p class="auth-brand__say">One place for your accountant and you â€” documents, job progress, and every request tracked from lodged to signed.</p>
 
         <ol class="auth-index">
           <li><span class="n">01</span><span class="t">Track every job<small>See exactly where each return sits, in real time.</small></span></li>
-          <li><span class="n">02</span><span class="t">Share documents securely<small>Upload once — your firm sees it instantly.</small></span></li>
+          <li><span class="n">02</span><span class="t">Share documents securely<small>Upload once â€” your firm sees it instantly.</small></span></li>
           <li><span class="n">03</span><span class="t">Review &amp; sign<small>Approve finished work without the email chase.</small></span></li>
         </ol>
       </div>
@@ -142,7 +142,7 @@
       </div>
     </aside>
 
-    <!-- RIGHT — the form -->
+    <!-- RIGHT â€” the form -->
     <main class="auth-form-col">
       <div class="auth-card">
         <p class="auth-eyebrow" id="authEyebrow">Sign in</p>
@@ -160,7 +160,7 @@
           </div>
           <div class="auth-field">
             <label for="fPass">Password</label>
-            <input type="password" id="fPass" placeholder="••••••••" autocomplete="current-password" required />
+            <input type="password" id="fPass" placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢" autocomplete="current-password" required />
           </div>
 
           <div class="auth-msg" id="authMsg"></div>
@@ -214,7 +214,7 @@
     var name = $('fName').value.trim();
     var btn = $('authSubmit');
     btn.disabled = true;
-    msg(register ? 'Creating account…' : 'Signing in…', '');
+    msg(register ? 'Creating accountâ€¦' : 'Signing inâ€¦', '');
 
     var url = register ? '/api/register' : '/api/login';
     var payload = register ? { email: email, name: name, password: password }
@@ -229,7 +229,7 @@
         localStorage.setItem('successwa.auth', JSON.stringify({
           email: res.j.email, name: res.j.name || '', role: res.j.role || 'client', token: res.j.token
         }));
-        msg('Success — redirecting…', 'ok');
+        msg('Success â€” redirectingâ€¦', 'ok');
         setTimeout(function () { location.href = homeFor(res.j.role || 'client'); }, 500);
       }).catch(function (err) {
         msg(err.message, 'err');
@@ -238,5 +238,6 @@
   });
 })();
 </script>
+<script src="assistant.js?v=1"></script>
 </body>
 </html>

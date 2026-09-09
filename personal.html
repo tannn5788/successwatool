@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Successwa Personal</title>
-<meta name="description" content="Personal income and tax deduction tracker for Australian returns — with vehicle and home office calculators and an estimated tax position." />
+<meta name="description" content="Personal income and tax deduction tracker for Australian returns â€” with vehicle and home office calculators and an estimated tax position." />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Archivo:wght@500;600;700;800&family=Karla:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -90,7 +90,7 @@
 
     <p class="side-label">Successwa Suite</p>
     <nav class="side-nav">
-      <a href="portal.html" class="side-item plain" id="backToPortal" style="display:none">← Back to Portal</a>
+      <a href="portal.html" class="side-item plain" id="backToPortal" style="display:none">â† Back to Portal</a>
       <a href="business.html" class="side-item plain">Successwa Business</a>
     </nav>
 
@@ -114,8 +114,8 @@
 
       <div class="action-row">
         <button class="btn btn-primary" id="btnAddEntry">+ Add Entry</button>
-        <button class="btn btn-outline" id="btnVehicle">🚗 Vehicle Calc</button>
-        <button class="btn btn-outline" id="btnHomeOffice">🏠 Home Office Calc</button>
+        <button class="btn btn-outline" id="btnVehicle">ðŸš— Vehicle Calc</button>
+        <button class="btn btn-outline" id="btnHomeOffice">ðŸ  Home Office Calc</button>
         <button class="btn btn-outline" id="btnExportCsv">Export CSV</button>
       </div>
 
@@ -140,7 +140,7 @@
             <p class="panel-sub">HELP/HECS debt, private health cover, family status for MLS calculation</p>
             <div class="summary" id="taxSummary"></div>
           </div>
-          <span class="panel-chevron">▶</span>
+          <span class="panel-chevron">â–¶</span>
         </div>
       </div>
 
@@ -151,7 +151,7 @@
             <p class="panel-sub">If you operate as a sole trader, enter your business net profit/loss here. Get this from your Successwa Business dashboard.</p>
             <div class="summary" id="bizSummary"></div>
           </div>
-          <span class="panel-chevron">▶</span>
+          <span class="panel-chevron">â–¶</span>
         </div>
       </div>
 
@@ -174,7 +174,7 @@
       <div class="action-row">
         <button class="btn btn-primary" id="btnAddEntry2">+ Add Entry</button>
         <button class="btn btn-outline" id="btnExportCsv2">Export CSV</button>
-        <input class="input search" id="entrySearch" type="search" placeholder="Search description, payer or tag…" />
+        <input class="input search" id="entrySearch" type="search" placeholder="Search description, payer or tagâ€¦" />
         <select class="input" id="entryTypeFilter">
           <option value="all">All types</option>
           <option value="income">Income only</option>
@@ -185,7 +185,7 @@
       <div class="card">
         <div class="bulk-bar" id="entryBulkBar" hidden>
           <span class="bulk-count" id="entryBulkCount">0 selected</span>
-          <button type="button" class="btn btn-xs danger" id="entryBulkDelete">🗑 Delete selected</button>
+          <button type="button" class="btn btn-xs danger" id="entryBulkDelete">ðŸ—‘ Delete selected</button>
           <button type="button" class="btn btn-xs" id="entryBulkClear">Clear</button>
         </div>
         <div class="table-wrap">
@@ -217,7 +217,7 @@
         <h2 class="card-title">Estimated position</h2>
         <div class="verdict" id="verdict"><b id="verdictAmount">$0.00</b><span id="verdictLabel">Add an income statement to see an estimate</span></div>
         <div class="breakdown" id="breakdown"></div>
-        <p class="fineprint">An estimate from what you have entered, using the resident rates below. It is not a lodgement and not tax advice — a registered tax agent should confirm your actual position.</p>
+        <p class="fineprint">An estimate from what you have entered, using the resident rates below. It is not a lodgement and not tax advice â€” a registered tax agent should confirm your actual position.</p>
       </div>
 
       <div class="card">
@@ -249,37 +249,37 @@
       <div class="card empty-card"><p>Part of the suite, with its own ledger. Enter your net profit under Business Activity on the dashboard to fold it into this estimate.</p></div>
     </section>
     <section class="page" id="page-help" hidden>
-      <h1 class="page-title">How to Use — Personal</h1>
+      <h1 class="page-title">How to Use â€” Personal</h1>
       <p class="page-sub">A step-by-step guide to Successwa Personal.</p>
 
       <div class="card">
         <h2 class="card-title">Quick start (5 steps)</h2>
         <ol class="help-list">
-          <li><b>Dashboard</b> — Add your Income Statement from each employer: gross pay and the tax already withheld (PAYG).</li>
-          <li><b>Entries</b> — Log every work-related deduction as you incur it, and keep the receipt with it.</li>
-          <li><b>Calculators</b> — Use the vehicle and home office calculators instead of guessing; they apply the current ATO rates.</li>
-          <li><b>Personal Tax Details</b> — Fill these in so HELP/HECS debt and the Medicare Levy Surcharge are counted correctly.</li>
-          <li><b>Tax Report</b> — Read your estimate, then export a CSV or PDF for your tax agent.</li>
+          <li><b>Dashboard</b> â€” Add your Income Statement from each employer: gross pay and the tax already withheld (PAYG).</li>
+          <li><b>Entries</b> â€” Log every work-related deduction as you incur it, and keep the receipt with it.</li>
+          <li><b>Calculators</b> â€” Use the vehicle and home office calculators instead of guessing; they apply the current ATO rates.</li>
+          <li><b>Personal Tax Details</b> â€” Fill these in so HELP/HECS debt and the Medicare Levy Surcharge are counted correctly.</li>
+          <li><b>Tax Report</b> â€” Read your estimate, then export a CSV or PDF for your tax agent.</li>
         </ol>
       </div>
 
       <div class="card">
         <h2 class="card-title">Understanding each page</h2>
         <ul class="help-list">
-          <li><b>Dashboard</b> — A live overview of income, deductions, and your estimated refund or amount owing for the current financial year.</li>
-          <li><b>Entries</b> — Every income and deduction line. Add, edit or delete entries; use recurring entries for regular items (e.g. monthly union fees).</li>
-          <li><b>Tax Report</b> — The full breakdown: taxable income, tax on income, Medicare levy, offsets, and PAYG already withheld.</li>
-          <li><b>Business Activity</b> — If you're a sole trader, carry your net profit from Successwa Business here so it's included in your individual estimate.</li>
+          <li><b>Dashboard</b> â€” A live overview of income, deductions, and your estimated refund or amount owing for the current financial year.</li>
+          <li><b>Entries</b> â€” Every income and deduction line. Add, edit or delete entries; use recurring entries for regular items (e.g. monthly union fees).</li>
+          <li><b>Tax Report</b> â€” The full breakdown: taxable income, tax on income, Medicare levy, offsets, and PAYG already withheld.</li>
+          <li><b>Business Activity</b> â€” If you're a sole trader, carry your net profit from Successwa Business here so it's included in your individual estimate.</li>
         </ul>
       </div>
 
       <div class="card">
         <h2 class="card-title">Tools</h2>
         <ul class="help-list">
-          <li><b>Generate PDF Report</b> — A clean summary you can send to your accountant.</li>
-          <li><b>Download Backup</b> — Saves a backup file of all your data. Do this before clearing site data or changing device.</li>
-          <li><b>Free Up Space</b> — Removes old financial-year data (your backup keeps a full copy).</li>
-          <li><b>Merge Backup Files</b> — Combines data from other backup files into this tracker.</li>
+          <li><b>Generate PDF Report</b> â€” A clean summary you can send to your accountant.</li>
+          <li><b>Download Backup</b> â€” Saves a backup file of all your data. Do this before clearing site data or changing device.</li>
+          <li><b>Free Up Space</b> â€” Removes old financial-year data (your backup keeps a full copy).</li>
+          <li><b>Merge Backup Files</b> â€” Combines data from other backup files into this tracker.</li>
         </ul>
         <p class="fineprint">Your data is saved to your signed-in account, so you can restore it on another device. Keep a backup anyway.</p>
       </div>
@@ -297,7 +297,7 @@
     <a href="help.html#faq">Disclaimer</a>
     <a href="help.html#contact">Contact</a>
   </nav>
-  <p class="footer-meta mono">© 2025 Successwa · Australian tax record keeping · Not tax advice</p>
+  <p class="footer-meta mono">Â© 2025 Successwa Â· Australian tax record keeping Â· Not tax advice</p>
 </footer>
 
 <!-- ============ ENTRY MODAL ============ -->
@@ -315,7 +315,7 @@
         <label class="field"><span>Date</span><input class="input" type="date" id="entryDate" required /></label>
         <label class="field"><span>Amount (AUD)</span><input class="input" type="number" id="entryAmount" step="0.01" min="0" placeholder="0.00" required /></label>
       </div>
-      <label class="check-row"><input type="checkbox" id="entryRecurring" /> ↻ Make this a recurring transaction</label>
+      <label class="check-row"><input type="checkbox" id="entryRecurring" /> â†» Make this a recurring transaction</label>
       <label class="field"><span>Category</span><select class="input" id="entryCategory" required></select></label>
       <p class="about-box" id="aboutBox"></p>
       <label class="field"><span>Description</span><input class="input" type="text" id="entryDesc" placeholder="e.g. Salary July, Work laptop" required /></label>
@@ -326,7 +326,7 @@
         <button type="button" class="btn btn-outline" id="tagAdd">Add</button>
       </div>
       <div class="tag-list" id="tagList"></div>
-      <label class="field" style="margin-top:16px"><span>Notes</span><textarea class="input" id="entryNotes" rows="3" placeholder="Additional notes…" style="height:auto;padding:10px 11px;resize:vertical"></textarea></label>
+      <label class="field" style="margin-top:16px"><span>Notes</span><textarea class="input" id="entryNotes" rows="3" placeholder="Additional notesâ€¦" style="height:auto;padding:10px 11px;resize:vertical"></textarea></label>
       <label class="field"><span>Receipt (optional)</span><input class="input" type="file" id="entryReceipt" accept="image/*,application/pdf" style="height:auto;padding:8px 11px" /></label>
       <div class="modal-actions">
         <button type="button" class="btn btn-outline" id="entryCancel">Cancel</button>
@@ -340,8 +340,8 @@
 <div class="modal-backdrop" id="isModal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="isModalTitle">
     <div class="modal-head">
-      <h2 class="modal-title" id="isModalTitle">Add Income Statement — FY 2026-27</h2>
-      <button type="button" class="modal-close" data-close="isModal" aria-label="Close">×</button>
+      <h2 class="modal-title" id="isModalTitle">Add Income Statement â€” FY 2026-27</h2>
+      <button type="button" class="modal-close" data-close="isModal" aria-label="Close">Ã—</button>
     </div>
     <form id="isForm">
       <input type="hidden" id="isId" />
@@ -359,10 +359,10 @@
       <label class="field"><span>Tax withheld (AUD)</span><input class="input" type="number" id="isWithheld" step="0.01" min="0" placeholder="e.g. 18500" required /></label>
       <p class="field-help">Total PAYG tax already withheld from your pay from this employer</p>
 
-      <label class="field"><span>Employer super — RESC (AUD, optional)</span><input class="input" type="number" id="isResc" step="0.01" min="0" placeholder="e.g. 2500" /></label>
+      <label class="field"><span>Employer super â€” RESC (AUD, optional)</span><input class="input" type="number" id="isResc" step="0.01" min="0" placeholder="e.g. 2500" /></label>
       <p class="field-help">Reportable employer super contributions (usually salary sacrifice, above the 12% SG)</p>
 
-      <label class="field"><span>Reportable fringe benefits — RFBA (AUD, optional)</span><input class="input" type="number" id="isRfba" step="0.01" min="0" placeholder="e.g. 17000" /></label>
+      <label class="field"><span>Reportable fringe benefits â€” RFBA (AUD, optional)</span><input class="input" type="number" id="isRfba" step="0.01" min="0" placeholder="e.g. 17000" /></label>
       <p class="field-help">The grossed-up reportable fringe benefits amount shown on your income statement (e.g. a salary-packaged home loan or rent). It is not taxed as income, but it does affect your Medicare levy surcharge and HELP/HECS repayments.</p>
 
       <label class="field"><span>Personal super claim (AUD, optional)</span><input class="input" type="number" id="isSuperClaim" step="0.01" min="0" placeholder="e.g. 5000" /></label>
@@ -385,8 +385,8 @@
 <div class="modal-backdrop" id="ptdModal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ptdTitle">
     <div class="modal-head">
-      <h2 class="modal-title" id="ptdTitle">Personal Tax Details — FY 2026-27</h2>
-      <button type="button" class="modal-close" data-close="ptdModal" aria-label="Close">×</button>
+      <h2 class="modal-title" id="ptdTitle">Personal Tax Details â€” FY 2026-27</h2>
+      <button type="button" class="modal-close" data-close="ptdModal" aria-label="Close">Ã—</button>
     </div>
     <form id="ptdForm">
       <p class="modal-intro">These personal details apply to you as an individual, regardless of how many employers you have. They affect the Medicare Levy, MLS, and HELP repayment calculations.</p>
@@ -413,7 +413,7 @@
         <label class="upload" id="ptdUploadLabel">Upload statement (image or PDF)
           <input type="file" id="ptdDoc" accept="image/*,application/pdf" hidden />
         </label>
-        <p class="field-help" style="margin-top:10px">Attach your private health insurance tax statement — it appears in your generated report.</p>
+        <p class="field-help" style="margin-top:10px">Attach your private health insurance tax statement â€” it appears in your generated report.</p>
       </div>
 
       <div class="group">
@@ -433,13 +433,13 @@
 <div class="modal-backdrop" id="bizModal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="bizTitle">
     <div class="modal-head">
-      <h2 class="modal-title" id="bizTitle">Add Business Activity — FY 2026-27</h2>
-      <button type="button" class="modal-close" data-close="bizModal" aria-label="Close">×</button>
+      <h2 class="modal-title" id="bizTitle">Add Business Activity â€” FY 2026-27</h2>
+      <button type="button" class="modal-close" data-close="bizModal" aria-label="Close">Ã—</button>
     </div>
     <form id="bizForm">
       <p class="modal-intro">As a sole trader, your business net profit (or loss) needs to be included on your personal tax return separately from wages. Get this figure from the <b>Net Profit</b> shown on your Successwa Business dashboard.</p>
 
-      <p class="note-box"><b>Note:</b> This is your <i>net</i> profit — total business income minus all business deductions. It corresponds to Item 15 (Net income or loss from business) on your personal tax return.</p>
+      <p class="note-box"><b>Note:</b> This is your <i>net</i> profit â€” total business income minus all business deductions. It corresponds to Item 15 (Net income or loss from business) on your personal tax return.</p>
 
       <label class="field"><span>Business net profit or loss (AUD)</span><input class="input" type="number" id="bizProfit" step="0.01" placeholder="e.g. 45000 or -5000" /></label>
       <p class="field-help">Use a positive number for profit, negative for loss. A loss can offset your other income.</p>
@@ -458,7 +458,7 @@
 <!-- ============ VEHICLE CALCULATOR ============ -->
 <div class="modal-backdrop" id="vehModal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="vehTitle">
-    <h2 class="modal-title" id="vehTitle">🚗 Vehicle Deduction Calculator</h2>
+    <h2 class="modal-title" id="vehTitle">ðŸš— Vehicle Deduction Calculator</h2>
     <p class="body-note" style="margin-bottom:18px">Calculate your work-related vehicle deduction. Choose the method that suits your situation.</p>
     <form id="vehForm">
       <label class="field"><span>Claim method</span>
@@ -483,9 +483,9 @@
 
       <label class="field"><span>Entry date</span><input class="input" type="date" id="vehDate" /></label>
       <p class="field-help">Determines which FY this deduction is claimed in. Defaults to 30 June of the currently selected FY.</p>
-      <label class="field"><span>Notes (optional)</span><input class="input" type="text" id="vehNotes" placeholder="e.g. Client visits Jul–Dec" /></label>
+      <label class="field"><span>Notes (optional)</span><input class="input" type="text" id="vehNotes" placeholder="e.g. Client visits Julâ€“Dec" /></label>
 
-      <p class="calc-line" id="vehLine">0 km × 91c/km = <b>$0.00</b></p>
+      <p class="calc-line" id="vehLine">0 km Ã— 91c/km = <b>$0.00</b></p>
       <p class="calc-rate" id="vehRate"></p>
       <div class="calc-total"><span>Total deduction</span><b id="vehTotal">$0.00</b></div>
       <div class="modal-actions">
@@ -499,12 +499,12 @@
 <!-- ============ HOME OFFICE CALCULATOR ============ -->
 <div class="modal-backdrop" id="hoModal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="hoTitle">
-    <h2 class="modal-title" id="hoTitle">🏠 Home Office Deduction Calculator</h2>
+    <h2 class="modal-title" id="hoTitle">ðŸ  Home Office Deduction Calculator</h2>
     <p class="body-note" style="margin-bottom:18px">Calculate your home office deduction. Choose the method that suits your record-keeping.</p>
     <form id="hoForm">
       <label class="field"><span>Claim method</span>
         <select class="input" id="hoMethod">
-          <option value="fixed">Fixed rate (70c/hr — simpler)</option>
+          <option value="fixed">Fixed rate (70c/hr â€” simpler)</option>
           <option value="actual">Actual cost (itemised)</option>
         </select>
       </label>
@@ -512,7 +512,7 @@
 
       <div id="hoFixed">
         <label class="field"><span>Hours worked from home (whole FY)</span><input class="input" type="number" id="hoHours" min="0" step="1" placeholder="e.g. 1200" /></label>
-        <p class="field-help">Example: 2 days/week × 8 hours × 48 weeks = 768 hours</p>
+        <p class="field-help">Example: 2 days/week Ã— 8 hours Ã— 48 weeks = 768 hours</p>
       </div>
       <div id="hoActual" hidden>
         <div class="field-row">
@@ -526,7 +526,7 @@
       <p class="field-help">Determines which FY this deduction is claimed in. Defaults to 30 June of the currently selected FY.</p>
       <label class="field"><span>Notes (optional)</span><input class="input" type="text" id="hoNotes" placeholder="e.g. WFH 2 days/week" /></label>
 
-      <p class="calc-line" id="hoLine">0 hours × 70c/hr = <b>$0.00</b></p>
+      <p class="calc-line" id="hoLine">0 hours Ã— 70c/hr = <b>$0.00</b></p>
       <p class="calc-rate" id="hoRate"></p>
       <div class="calc-total"><span>Total deduction</span><b id="hoTotal">$0.00</b></div>
       <div class="modal-actions">
@@ -542,7 +542,7 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="storageTitle">
     <div class="modal-head">
       <h2 class="modal-title" id="storageTitle">Manage your storage</h2>
-      <button type="button" class="modal-close" data-close="storageModal" aria-label="Close">×</button>
+      <button type="button" class="modal-close" data-close="storageModal" aria-label="Close">Ã—</button>
     </div>
 
     <div class="group">
@@ -554,37 +554,37 @@
     <p class="modal-intro">Successwa stores your data in your browser. When storage gets full, follow these steps to keep things running smoothly:</p>
 
     <div class="group">
-      <p class="group-label">1 · Save your data to a file</p>
+      <p class="group-label">1 Â· Save your data to a file</p>
       <p class="field-help" style="margin-bottom:12px">This creates a backup file including all details. Save it somewhere safe like Documents or your Desktop. You can restore it anytime.</p>
-      <button type="button" class="btn btn-primary btn-block" id="storageSave">💾 Save backup to file</button>
+      <button type="button" class="btn btn-primary btn-block" id="storageSave">ðŸ’¾ Save backup to file</button>
     </div>
 
     <div class="group">
-      <p class="group-label">2 · Free up space</p>
-      <p class="field-help" id="storageFreeHelp" style="margin-bottom:12px">Remove entries from old financial years. Your backup file (Step 1) keeps a complete copy — nothing is truly lost.</p>
+      <p class="group-label">2 Â· Free up space</p>
+      <p class="field-help" id="storageFreeHelp" style="margin-bottom:12px">Remove entries from old financial years. Your backup file (Step 1) keeps a complete copy â€” nothing is truly lost.</p>
       <button type="button" class="btn btn-outline btn-block" id="storageFree">Free up space</button>
     </div>
 
     <div class="group">
-      <p class="group-label">3 · Load backup from file</p>
+      <p class="group-label">3 Â· Load backup from file</p>
       <p class="field-help" style="margin-bottom:12px">Restore your data from a previously saved backup file. <b style="color:var(--red)">This replaces all current data</b> in this tracker. Save a backup of your current data first if you want to keep it.</p>
-      <button type="button" class="btn btn-outline btn-block" id="storageLoad">↻ Load backup file</button>
+      <button type="button" class="btn btn-outline btn-block" id="storageLoad">â†» Load backup file</button>
       <input type="file" id="loadInput" accept="application/json" hidden />
     </div>
 
     <div class="group" style="margin-bottom:14px">
-      <p class="group-label">★ Merge backup files</p>
+      <p class="group-label">â˜… Merge backup files</p>
       <p class="field-help" style="margin-bottom:12px">Combine entries from other backup files into this tracker without replacing what's here. You can select multiple files at once.</p>
       <button type="button" class="btn btn-outline btn-block" id="storageMerge">Merge backup files</button>
     </div>
 
     <div class="group" style="margin-bottom:0;border-top:1px solid var(--border);padding-top:16px">
-      <p class="group-label">☁ Cloud (Successwa server)</p>
+      <p class="group-label">â˜ Cloud (Successwa server)</p>
       <p class="field-help" style="margin-bottom:10px">Your data is saved to the Successwa server under your signed-in account, so you can restore it on another device.</p>
       <input type="email" id="cloudAccount" class="input" readonly style="margin-bottom:10px;opacity:.75;cursor:not-allowed" />
       <div style="display:flex;gap:9px">
-        <button type="button" class="btn btn-primary" style="flex:1" id="cloudSave">☁ Save to cloud</button>
-        <button type="button" class="btn btn-outline" style="flex:1" id="cloudLoad">↓ Load from cloud</button>
+        <button type="button" class="btn btn-primary" style="flex:1" id="cloudSave">â˜ Save to cloud</button>
+        <button type="button" class="btn btn-outline" style="flex:1" id="cloudLoad">â†“ Load from cloud</button>
       </div>
     </div>
   </div>
@@ -593,5 +593,6 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="personal.js?v=13"></script>
+<script src="assistant.js?v=1"></script>
 </body>
 </html>

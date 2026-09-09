@@ -1161,8 +1161,117 @@ app.get('/api/export', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ================= AI HELP ASSISTANT (Gemini) =================
+// Context-aware help chat. The API key stays server-side; the browser only ever
+// talks to /api/assistant. Auth is OPTIONAL: if a valid Bearer token is present we
+// personalise by role, otherwise we still answer general how-to questions.
+const { APP_KB } = require('./assistant-kb');
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+
+// Simple in-memory rate limiter: max requests per key per rolling window.
+const AI_RL_WINDOW_MS = 60 * 1000;
+const AI_RL_MAX = Number(process.env.GEMINI_RATE_MAX || 20);
+const aiHits = new Map(); // key -> [timestamps]
+function aiRateLimited(key) {
+  const now = Date.now();
+  const arr = (aiHits.get(key) || []).filter((t) => now - t < AI_RL_WINDOW_MS);
+  arr.push(now);
+  aiHits.set(key, arr);
+  return arr.length > AI_RL_MAX;
+}
+// Opportunistically resolve the caller's role from their session token (no hard fail).
+async function softUser(req) {
+  const h = req.headers.authorization || '';
+  const token = h.indexOf('Bearer ') === 0 ? h.slice(7) : null;
+  if (!token) return null;
+  const cached = sessionCache.get(token);
+  if (cached && cached.cacheExp > Date.now() && cached.sessionExp > Date.now()) return cached.user;
+  try {
+    const r = await pool.query(
+      'SELECT s.email, s.role, u.name FROM sessions s JOIN users u ON u.email=s.email WHERE s.token=$1 AND s.expires_at > now()',
+      [token]);
+    return r.rows.length ? { email: r.rows[0].email, role: r.rows[0].role, name: r.rows[0].name } : null;
+  } catch (e) { return null; }
+}
+
+app.post('/api/assistant', async (req, res) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return res.status(503).json({ error: 'AI assistant is not configured yet.' });
+
+  const question = String((req.body && req.body.question) || '').trim();
+  if (!question) return res.status(400).json({ error: 'question required' });
+  if (question.length > 2000) return res.status(400).json({ error: 'question too long' });
+
+  const rlKey = (req.headers.authorization || '') || req.ip || 'anon';
+  if (aiRateLimited(rlKey)) return res.status(429).json({ error: 'Too many requests. Please wait a moment.' });
+
+  const user = await softUser(req);
+  const ctx = (req.body && req.body.context) || {};
+  const page = String((req.body && req.body.page) || ctx.path || '').slice(0, 120);
+  const history = Array.isArray(req.body && req.body.history) ? req.body.history.slice(-8) : [];
+
+  const contextLines = [
+    'CURRENT USER ROLE: ' + (user ? user.role : 'guest (not signed in)'),
+    'CURRENT PAGE PATH: ' + (page || 'unknown'),
+    ctx.title ? ('CURRENT SECTION/HEADING: ' + String(ctx.title).slice(0, 160)) : '',
+    ctx.tab ? ('ACTIVE TAB/STEP: ' + String(ctx.tab).slice(0, 160)) : '',
+    ctx.modal ? ('OPEN DIALOG: ' + String(ctx.modal).slice(0, 160)) : '',
+  ].filter(Boolean).join('\n');
+
+  const systemPrompt =
+    'You are the built-in help assistant for the Successwa / Elite Client Hub web app. ' +
+    'Answer ONLY as a friendly product guide: explain features and walk the user through the ' +
+    'exact step they are on. Be concise and practical. Use the app handbook below as your source ' +
+    'of truth about how the app works; do not invent features that are not described. If you are ' +
+    'unsure, say so and point them to the relevant page or their accountant. For tax questions give ' +
+    'general educational guidance only, not personal financial or legal advice. ' +
+    'Always reply in ENGLISH, regardless of the language of the question.\n\n' +
+    '=== APP HANDBOOK ===\n' + APP_KB + '\n' +
+    '=== LIVE CONTEXT (where the user currently is) ===\n' + contextLines;
+
+  // Build Gemini "contents": prior turns + the new question, with a system instruction.
+  const contents = [];
+  history.forEach((m) => {
+    if (!m || !m.text) return;
+    contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: String(m.text).slice(0, 2000) }] });
+  });
+  contents.push({ role: 'user', parts: [{ text: question }] });
+
+  try {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+      encodeURIComponent(GEMINI_MODEL) + ':generateContent?key=' + encodeURIComponent(apiKey);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    const gr = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: contents,
+        generationConfig: { temperature: 0.4, maxOutputTokens: 800 },
+      }),
+      signal: ctrl.signal,
+    }).finally(() => clearTimeout(timer));
+
+    if (!gr.ok) {
+      const body = await gr.text().catch(() => '');
+      console.error('[assistant] Gemini HTTP', gr.status, body.slice(0, 300));
+      return res.status(502).json({ error: 'AI service error. Please try again.' });
+    }
+    const data = await gr.json();
+    const answer = (((data.candidates || [])[0] || {}).content || {}).parts &&
+      data.candidates[0].content.parts.map((p) => p.text || '').join('').trim();
+    if (!answer) return res.status(502).json({ error: 'No answer returned. Please rephrase and try again.' });
+    res.json({ ok: true, answer });
+  } catch (e) {
+    console.error('[assistant]', e && e.message);
+    res.status(502).json({ error: 'AI request failed. Please try again.' });
+  }
+});
+
 // Multer / generic error handler
 app.use(function (err, req, res, next) {
+
   if (err) return res.status(400).json({ error: err.message });
   next();
 });

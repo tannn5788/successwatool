@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Successwa Business</title>
-<meta name="description" content="Business revenue, expense and GST tracker for Australian sole traders — with an estimated GST position and net profit summary." />
+<meta name="description" content="Business revenue, expense and GST tracker for Australian sole traders â€” with an estimated GST position and net profit summary." />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Archivo:wght@500;600;700;800&family=Karla:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -94,7 +94,7 @@
 
     <p class="side-label">Successwa Suite</p>
     <nav class="side-nav">
-      <a href="portal.html" class="side-item plain" id="backToPortal" style="display:none">← Back to Portal</a>
+      <a href="portal.html" class="side-item plain" id="backToPortal" style="display:none">â† Back to Portal</a>
       <a href="personal.html" class="side-item plain">Successwa Personal</a>
     </nav>
 
@@ -134,7 +134,7 @@
             <p class="panel-sub">Configure GST registration, business name, ABN, and sole trader status</p>
             <div class="summary" id="settingsSummary"></div>
           </div>
-          <span class="panel-chevron">▶</span>
+          <span class="panel-chevron">â–¶</span>
         </div>
       </div>
 
@@ -157,7 +157,7 @@
       <div class="action-row">
         <button class="btn btn-primary" id="btnAddTx2">+ Add Transaction</button>
         <button class="btn btn-outline" id="btnExportCsv2">Export CSV</button>
-        <input class="input search" id="txSearch" type="search" placeholder="Search description, party or tag…" />
+        <input class="input search" id="txSearch" type="search" placeholder="Search description, party or tagâ€¦" />
         <select class="input" id="txTypeFilter">
           <option value="all">All types</option>
           <option value="income">Income only</option>
@@ -168,7 +168,7 @@
       <div class="card">
         <div class="bulk-bar" id="txBulkBar" hidden>
           <span class="bulk-count" id="txBulkCount">0 selected</span>
-          <button type="button" class="btn btn-xs danger" id="txBulkDelete">🗑 Delete selected</button>
+          <button type="button" class="btn btn-xs danger" id="txBulkDelete">ðŸ—‘ Delete selected</button>
           <button type="button" class="btn btn-xs" id="txBulkClear">Clear</button>
         </div>
         <div class="table-wrap">
@@ -200,7 +200,7 @@
         <h2 class="card-title">GST position</h2>
         <div class="verdict" id="gstVerdict"><b id="gstAmount">$0.00</b><span id="gstLabel">Register for GST to track your BAS position</span></div>
         <div class="breakdown" id="gstBreakdown"></div>
-        <p class="fineprint">An estimate of your GST position for BAS, based on transactions marked as including GST. It assumes you account on a cash/accruals basis at 10%. It is not a lodgement and not tax advice — confirm with a registered tax/BAS agent.</p>
+        <p class="fineprint">An estimate of your GST position for BAS, based on transactions marked as including GST. It assumes you account on a cash/accruals basis at 10%. It is not a lodgement and not tax advice â€” confirm with a registered tax/BAS agent.</p>
       </div>
 
       <div class="card">
@@ -243,27 +243,27 @@
 
     <!-- Secondary pages -->
     <section class="page" id="page-help" hidden>
-      <h1 class="page-title">How to Use — Business</h1>
+      <h1 class="page-title">How to Use â€” Business</h1>
       <p class="page-sub">A step-by-step guide to Successwa Business.</p>
 
       <div class="card">
         <h2 class="card-title">Quick start (5 steps)</h2>
         <ol class="help-list">
-          <li><b>Business Settings</b> — Set your business name, ABN, and whether you're registered for GST.</li>
-          <li><b>Transactions</b> — Add every sale as Income and every cost as an Expense; enter the GST-inclusive amount.</li>
-          <li><b>GST</b> — Tick "Includes GST" only on transactions that actually carry GST (most do if you're registered).</li>
-          <li><b>Tax Report</b> — Check your net profit and estimated GST position.</li>
-          <li><b>Link to Personal</b> — Carry the net profit into Successwa Personal → Business Activity to complete your individual estimate.</li>
+          <li><b>Business Settings</b> â€” Set your business name, ABN, and whether you're registered for GST.</li>
+          <li><b>Transactions</b> â€” Add every sale as Income and every cost as an Expense; enter the GST-inclusive amount.</li>
+          <li><b>GST</b> â€” Tick "Includes GST" only on transactions that actually carry GST (most do if you're registered).</li>
+          <li><b>Tax Report</b> â€” Check your net profit and estimated GST position.</li>
+          <li><b>Link to Personal</b> â€” Carry the net profit into Successwa Personal â†’ Business Activity to complete your individual estimate.</li>
         </ol>
       </div>
 
       <div class="card">
         <h2 class="card-title">Understanding each page</h2>
         <ul class="help-list">
-          <li><b>Dashboard</b> — Overview of revenue, expenses, net profit, and your GST position for the year.</li>
-          <li><b>Transactions</b> — Every income and expense line. Add, edit or delete; use recurring entries for regular costs (e.g. rent).</li>
-          <li><b>Tax Report</b> — Net profit breakdown by category, GST-exclusive when you're registered.</li>
-          <li><b>BAS Summary</b> — Quarterly GST breakdown for your Business Activity Statement.</li>
+          <li><b>Dashboard</b> â€” Overview of revenue, expenses, net profit, and your GST position for the year.</li>
+          <li><b>Transactions</b> â€” Every income and expense line. Add, edit or delete; use recurring entries for regular costs (e.g. rent).</li>
+          <li><b>Tax Report</b> â€” Net profit breakdown by category, GST-exclusive when you're registered.</li>
+          <li><b>BAS Summary</b> â€” Quarterly GST breakdown for your Business Activity Statement.</li>
         </ul>
       </div>
 
@@ -279,10 +279,10 @@
       <div class="card">
         <h2 class="card-title">Tools</h2>
         <ul class="help-list">
-          <li><b>Generate PDF Report</b> — A clean summary you can send to your accountant.</li>
-          <li><b>Download Backup</b> — Saves a backup file of all your data. Do this before clearing site data or changing device.</li>
-          <li><b>Free Up Space</b> — Removes old financial-year data (your backup keeps a full copy).</li>
-          <li><b>Merge Backup Files</b> — Combines data from other backup files into this tracker.</li>
+          <li><b>Generate PDF Report</b> â€” A clean summary you can send to your accountant.</li>
+          <li><b>Download Backup</b> â€” Saves a backup file of all your data. Do this before clearing site data or changing device.</li>
+          <li><b>Free Up Space</b> â€” Removes old financial-year data (your backup keeps a full copy).</li>
+          <li><b>Merge Backup Files</b> â€” Combines data from other backup files into this tracker.</li>
         </ul>
         <p class="fineprint">Your data is saved to your signed-in account, so you can restore it on another device. Keep a backup anyway.</p>
       </div>
@@ -300,7 +300,7 @@
     <a href="help.html#faq">Disclaimer</a>
     <a href="help.html#contact">Contact</a>
   </nav>
-  <p class="footer-meta mono">© 2025 Successwa · Australian business record keeping · Not tax advice</p>
+  <p class="footer-meta mono">Â© 2025 Successwa Â· Australian business record keeping Â· Not tax advice</p>
 </footer>
 
 <!-- ============ TRANSACTION MODAL ============ -->
@@ -308,7 +308,7 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="txModalTitle">
     <div class="modal-head">
       <h2 class="modal-title" id="txModalTitle">Add Transaction</h2>
-      <button type="button" class="modal-close" data-close="txModal" aria-label="Close">×</button>
+      <button type="button" class="modal-close" data-close="txModal" aria-label="Close">Ã—</button>
     </div>
     <form id="txForm">
       <input type="hidden" id="txId" />
@@ -322,7 +322,7 @@
         <label class="field"><span>Amount (inc. GST)</span><input class="input" type="number" id="txAmount" step="0.01" min="0" placeholder="0.00" required /></label>
       </div>
       <label class="check-row"><input type="checkbox" id="txGst" checked /> Includes 10% GST</label>
-      <label class="check-row"><input type="checkbox" id="txRecurring" /> ↻ Make this a recurring transaction</label>
+      <label class="check-row"><input type="checkbox" id="txRecurring" /> â†» Make this a recurring transaction</label>
       <div class="group" id="recurringBox" hidden>
         <div class="field-row">
           <label class="field"><span>Frequency</span>
@@ -351,7 +351,7 @@
         <button type="button" class="btn btn-outline" id="tagAdd">Add</button>
       </div>
       <div class="tag-list" id="tagList"></div>
-      <label class="field" style="margin-top:16px"><span>Notes</span><textarea class="input" id="txNotes" rows="3" placeholder="Additional notes…" style="height:auto;padding:10px 11px;resize:vertical"></textarea></label>
+      <label class="field" style="margin-top:16px"><span>Notes</span><textarea class="input" id="txNotes" rows="3" placeholder="Additional notesâ€¦" style="height:auto;padding:10px 11px;resize:vertical"></textarea></label>
       <label class="field"><span>Receipt (optional)</span><input class="input" type="file" id="txReceipt" accept="image/*,application/pdf" style="height:auto;padding:8px 11px" /></label>
       <div class="modal-actions">
         <button type="button" class="btn btn-outline" data-close="txModal">Cancel</button>
@@ -366,7 +366,7 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <div class="modal-head">
       <h2 class="modal-title" id="settingsTitle">Business Settings</h2>
-      <button type="button" class="modal-close" data-close="settingsModal" aria-label="Close">×</button>
+      <button type="button" class="modal-close" data-close="settingsModal" aria-label="Close">Ã—</button>
     </div>
     <form id="settingsForm">
       <p class="modal-intro">These details describe your business and control how GST is calculated across your transactions.</p>
@@ -406,7 +406,7 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="storageTitle">
     <div class="modal-head">
       <h2 class="modal-title" id="storageTitle">Manage your storage</h2>
-      <button type="button" class="modal-close" data-close="storageModal" aria-label="Close">×</button>
+      <button type="button" class="modal-close" data-close="storageModal" aria-label="Close">Ã—</button>
     </div>
 
     <div class="group">
@@ -418,37 +418,37 @@
     <p class="modal-intro">Successwa stores your data in your browser. When storage gets full, follow these steps to keep things running smoothly:</p>
 
     <div class="group">
-      <p class="group-label">1 · Save your data to a file</p>
+      <p class="group-label">1 Â· Save your data to a file</p>
       <p class="field-help" style="margin-bottom:12px">This creates a backup file including all details. Save it somewhere safe like Documents or your Desktop. You can restore it anytime.</p>
-      <button type="button" class="btn btn-primary btn-block" id="storageSave">💾 Save backup to file</button>
+      <button type="button" class="btn btn-primary btn-block" id="storageSave">ðŸ’¾ Save backup to file</button>
     </div>
 
     <div class="group">
-      <p class="group-label">2 · Free up space</p>
-      <p class="field-help" id="storageFreeHelp" style="margin-bottom:12px">Remove transactions from old financial years. Your backup file (Step 1) keeps a complete copy — nothing is truly lost.</p>
+      <p class="group-label">2 Â· Free up space</p>
+      <p class="field-help" id="storageFreeHelp" style="margin-bottom:12px">Remove transactions from old financial years. Your backup file (Step 1) keeps a complete copy â€” nothing is truly lost.</p>
       <button type="button" class="btn btn-outline btn-block" id="storageFree">Free up space</button>
     </div>
 
     <div class="group">
-      <p class="group-label">3 · Load backup from file</p>
+      <p class="group-label">3 Â· Load backup from file</p>
       <p class="field-help" style="margin-bottom:12px">Restore your data from a previously saved backup file. <b style="color:var(--red)">This replaces all current data</b> in this tracker. Save a backup of your current data first if you want to keep it.</p>
-      <button type="button" class="btn btn-outline btn-block" id="storageLoad">↻ Load backup file</button>
+      <button type="button" class="btn btn-outline btn-block" id="storageLoad">â†» Load backup file</button>
       <input type="file" id="loadInput" accept="application/json" hidden />
     </div>
 
     <div class="group" style="margin-bottom:14px">
-      <p class="group-label">★ Merge backup files</p>
+      <p class="group-label">â˜… Merge backup files</p>
       <p class="field-help" style="margin-bottom:12px">Combine transactions from another backup file into this tracker without replacing what's here.</p>
       <button type="button" class="btn btn-outline btn-block" id="storageMerge">Merge backup file</button>
     </div>
 
     <div class="group" style="margin-bottom:0;border-top:1px solid var(--border);padding-top:16px">
-      <p class="group-label">☁ Cloud (Successwa server)</p>
+      <p class="group-label">â˜ Cloud (Successwa server)</p>
       <p class="field-help" style="margin-bottom:10px">Your data is saved to the Successwa server under your signed-in account, so you can restore it on another device.</p>
       <input type="email" id="cloudAccount" class="input" readonly style="margin-bottom:10px;opacity:.75;cursor:not-allowed" />
       <div style="display:flex;gap:9px">
-        <button type="button" class="btn btn-primary" style="flex:1" id="cloudSave">☁ Save to cloud</button>
-        <button type="button" class="btn btn-outline" style="flex:1" id="cloudLoad">↓ Load from cloud</button>
+        <button type="button" class="btn btn-primary" style="flex:1" id="cloudSave">â˜ Save to cloud</button>
+        <button type="button" class="btn btn-outline" style="flex:1" id="cloudLoad">â†“ Load from cloud</button>
       </div>
     </div>
   </div>
@@ -457,5 +457,6 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="business.js?v=13"></script>
+<script src="assistant.js?v=1"></script>
 </body>
 </html>
