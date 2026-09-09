@@ -8,9 +8,8 @@
   if (window.__successwaAssistant) return;
   window.__successwaAssistant = true;
 
-  var AUTH_KEY = 'successwa.auth';
   function token() {
-    try { var a = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null'); return a && a.token; }
+    try { var a = JSON.parse(localStorage.getItem('successwa.auth') || 'null'); return a && a.token; }
     catch (e) { return null; }
   }
 
@@ -34,7 +33,22 @@
     return ctx;
   }
 
-  var history = []; // {role:'user'|'assistant', text}
+  var AUTH_KEY = 'successwa.auth';
+  function currentEmail() {
+    try { var a = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null'); return (a && a.email) ? String(a.email).toLowerCase() : 'guest'; }
+    catch (e) { return 'guest'; }
+  }
+
+  // History is remembered PER ACCOUNT EMAIL, so switching accounts shows a fresh,
+  // account-specific conversation (and never leaks one user's chat to another).
+  var acct = currentEmail();
+  var HIST_KEY = 'successwa.assistant.history.' + acct;
+  var OPEN_KEY = 'successwa.assistant.open';
+  var history = [];   // {role:'user'|'assistant', text}
+  try { history = JSON.parse(localStorage.getItem(HIST_KEY) || '[]') || []; } catch (e) { history = []; }
+  function saveHistory() {
+    try { localStorage.setItem(HIST_KEY, JSON.stringify(history.slice(-40))); } catch (e) {}
+  }
 
   // ---- Styles (scoped, injected once) ----
   var css = '' +
@@ -64,7 +78,13 @@
     '.swaA-msg.err{align-self:flex-start;background:#fbeaea;border:1px solid #e3b7b7;color:#8a2b22}' +
     '.swaA-hint{align-self:center;font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.5px;' +
       'text-transform:uppercase;color:#8a8074;text-align:center;padding:6px 10px}' +
-    '.swaA-typing{align-self:flex-start;color:#8a8074;font-size:13px;font-style:italic;padding:4px 6px}' +
+    '.swaA-typing{align-self:flex-start;display:flex;gap:5px;align-items:center;padding:11px 13px;' +
+      'background:#fff;border:1px solid #e5ddd0;border-radius:9px;border-bottom-left-radius:2px}' +
+    '.swaA-typing span{width:7px;height:7px;border-radius:50%;background:#b0a692;display:inline-block;' +
+      'animation:swaBlink 1.4s infinite both}' +
+    '.swaA-typing span:nth-child(2){animation-delay:.2s}' +
+    '.swaA-typing span:nth-child(3){animation-delay:.4s}' +
+    '@keyframes swaBlink{0%,80%,100%{transform:translateY(0);opacity:.35}40%{transform:translateY(-4px);opacity:1}}' +
     '.swaA-foot{flex:none;border-top:1px solid #e5ddd0;padding:10px;display:flex;gap:8px;background:#faf7f2}' +
     '.swaA-foot textarea{flex:1;resize:none;height:40px;max-height:110px;border:1px solid #d8cfc0;border-radius:6px;' +
       'padding:9px 11px;font-family:inherit;font-size:13.5px;background:#fff;color:#1a1614;outline:none}' +
@@ -86,10 +106,10 @@
   var panel = document.createElement('div');
   panel.id = 'swaAsstPanel';
   panel.innerHTML =
-    '<div class="swaA-head"><b>Help Assistant</b><span class="swaA-tag">AI</span>' +
+    '<div class="swaA-head"><b>Enzo</b><span class="swaA-tag">AI Assistant</span>' +
       '<button class="swaA-x" aria-label="Close">&times;</button></div>' +
     '<div class="swaA-body" id="swaAbody">' +
-      '<div class="swaA-hint">Ask about anything on this page</div>' +
+      '<div class="swaA-hint">Hi, I\'m Enzo — ask me anything about this page</div>' +
     '</div>' +
     '<div class="swaA-foot">' +
       '<textarea id="swaAinput" placeholder="Ask a question..." rows="1"></textarea>' +
@@ -105,12 +125,14 @@
   var input = panel.querySelector('#swaAinput');
   var sendBtn = panel.querySelector('#swaAsend');
 
-  function open() { panel.classList.add('open'); setTimeout(function () { input.focus(); }, 50); }
-  function close() { panel.classList.remove('open'); }
+  function open() { panel.classList.add('open'); try { sessionStorage.setItem(OPEN_KEY, '1'); } catch (e) {} setTimeout(function () { input.focus(); }, 50); }
+  function close() { panel.classList.remove('open'); try { sessionStorage.setItem(OPEN_KEY, '0'); } catch (e) {} }
   btn.addEventListener('click', function () { panel.classList.contains('open') ? close() : open(); });
   panel.querySelector('.swaA-x').addEventListener('click', close);
 
+  var hint = panel.querySelector('.swaA-hint');
   function addMsg(text, cls) {
+    if (hint && hint.parentNode) hint.remove();
     var d = document.createElement('div');
     d.className = 'swaA-msg ' + cls;
     d.textContent = text;
@@ -118,6 +140,12 @@
     body.scrollTop = body.scrollHeight;
     return d;
   }
+
+  // Restore prior conversation (persists across page/tab navigation within the session).
+  if (history.length) {
+    history.forEach(function (m) { addMsg(m.text, m.role === 'assistant' ? 'a' : 'u'); });
+  }
+  try { if (sessionStorage.getItem(OPEN_KEY) === '1') open(); } catch (e) {}
 
   var busy = false;
   function send() {
@@ -128,11 +156,12 @@
     input.style.height = '40px';
     addMsg(q, 'u');
     history.push({ role: 'user', text: q });
+    saveHistory();
     busy = true; sendBtn.disabled = true;
 
     var typing = document.createElement('div');
     typing.className = 'swaA-typing';
-    typing.textContent = 'Thinking\u2026';
+    typing.innerHTML = '<span></span><span></span><span></span>';
     body.appendChild(typing);
     body.scrollTop = body.scrollHeight;
 
@@ -151,6 +180,7 @@
       if (res.ok && res.j.answer) {
         addMsg(res.j.answer, 'a');
         history.push({ role: 'assistant', text: res.j.answer });
+        saveHistory();
       } else {
         addMsg(res.j.error || 'Something went wrong. Please try again.', 'err');
       }

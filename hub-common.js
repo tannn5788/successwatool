@@ -131,7 +131,7 @@
 
   // Background polling endpoints should NOT trigger the visible loader
   // (they run on a timer and would otherwise flash the bar/overlay every 20s).
-  var SILENT = ['/api/review/count', '/api/my-notifications/count'];
+  var SILENT = ['/api/review/count', '/api/my-notifications/count', '/api/assistant'];
   function isSilent(url) {
     url = String(url || '');
     for (var i = 0; i < SILENT.length; i++) { if (url.indexOf(SILENT[i]) !== -1) return true; }

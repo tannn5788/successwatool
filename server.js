@@ -1161,16 +1161,17 @@ app.get('/api/export', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ================= AI HELP ASSISTANT (Gemini) =================
+// ================= AI HELP ASSISTANT (OpenRouter) =================
 // Context-aware help chat. The API key stays server-side; the browser only ever
 // talks to /api/assistant. Auth is OPTIONAL: if a valid Bearer token is present we
 // personalise by role, otherwise we still answer general how-to questions.
 const { APP_KB } = require('./assistant-kb');
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+const AI_MODEL = process.env.OPENROUTER_MODEL || 'qwen/qwen3.8-27b';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 // Simple in-memory rate limiter: max requests per key per rolling window.
 const AI_RL_WINDOW_MS = 60 * 1000;
-const AI_RL_MAX = Number(process.env.GEMINI_RATE_MAX || 20);
+const AI_RL_MAX = Number(process.env.AI_RATE_MAX || 20);
 const aiHits = new Map(); // key -> [timestamps]
 function aiRateLimited(key) {
   const now = Date.now();
@@ -1194,8 +1195,195 @@ async function softUser(req) {
   } catch (e) { return null; }
 }
 
+// ---- Read-only DB tools the assistant may call (role-scoped) ----
+// Declarations advertised to Gemini (function calling).
+const ASSISTANT_TOOLS = [
+  {
+    name: 'lookup_client',
+    description: 'Search the firm\'s clients by name, email or client ID. Staff only. Returns matching clients with their id, name, email and phone.',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Name, email or client ID fragment to search for.' } },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_client_jobs',
+    description: 'List jobs for a client (by client ID like CL-0001, or by name). Staff only. Returns each job\'s id, type, financial year, stage label, and how many requested documents are still outstanding.',
+    parameters: {
+      type: 'object',
+      properties: { client: { type: 'string', description: 'Client ID or name.' } },
+      required: ['client'],
+    },
+  },
+  {
+    name: 'get_job_status',
+    description: 'Get the status of one job by its job ID (e.g. JB-0001). Returns stage, client, assigned staff, number of documents uploaded, and outstanding document requests (i.e. whether the client has submitted their files).',
+    parameters: {
+      type: 'object',
+      properties: { jobId: { type: 'string', description: 'Job ID such as JB-0001.' } },
+      required: ['jobId'],
+    },
+  },
+  {
+    name: 'my_jobs',
+    description: 'For a signed-in CLIENT: list the client\'s own jobs with plain-language status and whether documents are still needed. Use this when a client asks about their own jobs or documents.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'lookup_user',
+    description: 'Search LOGIN ACCOUNTS (users) by email or name. Staff only. Returns each account\'s email, name, role (client/reception/accountant/supervisor/administrator) and whether it is active. Use this to answer questions about a person\'s role, permissions, or whether an account exists.',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Email or name fragment to search for.' } },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'universal_search',
+    description: 'Search EVERYTHING at once for a term: login accounts (users), clients, entities, and jobs. Staff only. Use this when you are unsure which record type the user means, or when a client lookup finds nothing (the record may be a user account, entity, or job instead).',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Any name, email, ID or keyword to search across all records.' } },
+      required: ['query'],
+    },
+  },
+];
+const STAFF_ROLES = ['administrator', 'supervisor', 'accountant', 'reception'];
+
+// Executes a tool call, enforcing role permissions. Returns a plain object result.
+async function runAssistantTool(name, args, user) {
+  const role = user && user.role;
+  const isStaff = STAFF_ROLES.indexOf(role) !== -1;
+  args = args || {};
+  try {
+    if (name === 'lookup_client') {
+      if (!isStaff) return { error: 'Only firm staff can look up clients.' };
+      const q = String(args.query || '').trim().toLowerCase();
+      if (!q) return { error: 'query required' };
+      const r = await pool.query(
+        'SELECT id, name, email, phone FROM clients WHERE lower(name) LIKE $1 OR lower(email) LIKE $1 OR lower(id) LIKE $1 ORDER BY id LIMIT 10',
+        ['%' + q + '%']);
+      return { count: r.rows.length, clients: r.rows };
+    }
+    if (name === 'get_client_jobs') {
+      if (!isStaff) return { error: 'Only firm staff can view client jobs.' };
+      const key = String(args.client || '').trim().toLowerCase();
+      if (!key) return { error: 'client required' };
+      const cr = await pool.query(
+        'SELECT id, name FROM clients WHERE lower(id)=$1 OR lower(name) LIKE $2 ORDER BY id LIMIT 1',
+        [key, '%' + key + '%']);
+      if (!cr.rows.length) return { found: false, message: 'No client matched "' + args.client + '".' };
+      const clientId = cr.rows[0].id;
+      let sql =
+        `SELECT j.id, j.job_type, j.financial_year, j.stage, j.accountant_email
+         FROM jobs j WHERE j.client_id=$1`;
+      const params = [clientId];
+      if (role === 'accountant') { sql += ' AND lower(j.accountant_email)=$2'; params.push(normAccount(user.email)); }
+      sql += ' ORDER BY j.updated_at DESC';
+      const jr = await pool.query(sql, params);
+      const jobs = [];
+      for (const j of jr.rows) {
+        const rem = await pool.query("SELECT COUNT(*)::int AS n FROM doc_requests WHERE job_id=$1 AND status='pending'", [j.id]);
+        jobs.push({
+          jobId: j.id, type: j.job_type, financialYear: j.financial_year,
+          stage: (wf.STAGE_MAP[j.stage] || {}).internalLabel || j.stage,
+          outstandingDocuments: rem.rows[0].n,
+        });
+      }
+      return { client: cr.rows[0], jobCount: jobs.length, jobs: jobs };
+    }
+    if (name === 'get_job_status') {
+      if (!isStaff) return { error: 'Only firm staff can view job status here.' };
+      const jobId = String(args.jobId || '').trim().toUpperCase();
+      if (!jobId) return { error: 'jobId required' };
+      const jr = await pool.query(
+        `SELECT j.*, c.name AS client_name, ua.name AS accountant_name, us.name AS supervisor_name
+         FROM jobs j JOIN clients c ON c.id=j.client_id
+         LEFT JOIN users ua ON lower(ua.email)=lower(j.accountant_email)
+         LEFT JOIN users us ON lower(us.email)=lower(j.supervisor_email)
+         WHERE upper(j.id)=$1`, [jobId]);
+      if (!jr.rows.length) return { found: false, message: 'No job matched "' + args.jobId + '".' };
+      const j = jr.rows[0];
+      if (role === 'accountant' && normAccount(j.accountant_email) !== normAccount(user.email)) {
+        return { error: 'You can only view jobs assigned to you.' };
+      }
+      const [docs, reqs] = await Promise.all([
+        pool.query('SELECT COUNT(*)::int AS n FROM documents WHERE job_id=$1', [j.id]),
+        pool.query("SELECT COUNT(*)::int AS n FROM doc_requests WHERE job_id=$1 AND status='pending'", [j.id]),
+      ]);
+      const outstanding = reqs.rows[0].n;
+      return {
+        jobId: j.id, client: j.client_name, type: j.job_type, financialYear: j.financial_year,
+        stage: (wf.STAGE_MAP[j.stage] || {}).internalLabel || j.stage,
+        accountant: j.accountant_name, supervisor: j.supervisor_name,
+        documentsUploaded: docs.rows[0].n,
+        outstandingRequests: outstanding,
+        clientHasSubmittedAll: outstanding === 0,
+      };
+    }
+    if (name === 'my_jobs') {
+      if (role !== 'client') return { error: 'This tool is only for signed-in clients.' };
+      const cr = await pool.query('SELECT id FROM clients WHERE lower(email)=$1', [normAccount(user.email)]);
+      if (!cr.rows.length) return { jobCount: 0, jobs: [] };
+      const jr = await pool.query(
+        'SELECT id, job_type, financial_year, stage, on_hold FROM jobs WHERE client_id=$1 ORDER BY updated_at DESC',
+        [cr.rows[0].id]);
+      const jobs = [];
+      for (const j of jr.rows) {
+        const view = wf.clientView(j);
+        const rem = await pool.query("SELECT COUNT(*)::int AS n FROM doc_requests WHERE job_id=$1 AND status='pending'", [j.id]);
+        jobs.push({
+          jobId: j.id, type: j.job_type, financialYear: j.financial_year,
+          status: view.clientStatus, documentsStillNeeded: rem.rows[0].n,
+        });
+      }
+      return { jobCount: jobs.length, jobs: jobs };
+    }
+    if (name === 'lookup_user') {
+      if (!isStaff) return { error: 'Only firm staff can look up user accounts.' };
+      const q = String(args.query || '').trim().toLowerCase();
+      if (!q) return { error: 'query required' };
+      const r = await pool.query(
+        'SELECT email, name, role, active FROM users WHERE lower(email) LIKE $1 OR lower(name) LIKE $1 ORDER BY email LIMIT 10',
+        ['%' + q + '%']);
+      return { count: r.rows.length, users: r.rows };
+    }
+    if (name === 'universal_search') {
+      if (!isStaff) return { error: 'Only firm staff can search records.' };
+      const q = String(args.query || '').trim().toLowerCase();
+      if (!q) return { error: 'query required' };
+      const like = '%' + q + '%';
+      const [users, clients, entities, jobs] = await Promise.all([
+        pool.query('SELECT email, name, role, active FROM users WHERE lower(email) LIKE $1 OR lower(name) LIKE $1 ORDER BY email LIMIT 8', [like]),
+        pool.query('SELECT id, name, email, phone FROM clients WHERE lower(name) LIKE $1 OR lower(email) LIKE $1 OR lower(id) LIKE $1 ORDER BY id LIMIT 8', [like]),
+        pool.query('SELECT id, client_id, entity_name, entity_type, abn FROM entities WHERE lower(entity_name) LIKE $1 OR lower(id) LIKE $1 OR lower(abn) LIKE $1 ORDER BY id LIMIT 8', [like]),
+        pool.query(
+          `SELECT j.id, j.job_type, j.financial_year, j.stage, c.name AS client_name
+           FROM jobs j JOIN clients c ON c.id=j.client_id
+           WHERE lower(j.id) LIKE $1 OR lower(c.name) LIKE $1 OR lower(j.job_type) LIKE $1
+           ORDER BY j.updated_at DESC LIMIT 8`, [like]),
+      ]);
+      const jobRows = jobs.rows.map((j) => ({
+        jobId: j.id, type: j.job_type, financialYear: j.financial_year,
+        stage: (wf.STAGE_MAP[j.stage] || {}).internalLabel || j.stage, client: j.client_name,
+      }));
+      return {
+        query: args.query,
+        totals: { users: users.rows.length, clients: clients.rows.length, entities: entities.rows.length, jobs: jobRows.length },
+        users: users.rows, clients: clients.rows, entities: entities.rows, jobs: jobRows,
+      };
+    }
+    return { error: 'unknown tool' };
+  } catch (e) {
+    console.error('[assistant tool]', name, e && e.message);
+    return { error: 'lookup failed' };
+  }
+}
+
 app.post('/api/assistant', async (req, res) => {
-  const apiKey = process.env.GEMINI_API_KEY;
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return res.status(503).json({ error: 'AI assistant is not configured yet.' });
 
   const question = String((req.body && req.body.question) || '').trim();
@@ -1219,55 +1407,92 @@ app.post('/api/assistant', async (req, res) => {
   ].filter(Boolean).join('\n');
 
   const systemPrompt =
-    'You are the built-in help assistant for the Successwa / Elite Client Hub web app. ' +
-    'Answer ONLY as a friendly product guide: explain features and walk the user through the ' +
-    'exact step they are on. Be concise and practical. Use the app handbook below as your source ' +
-    'of truth about how the app works; do not invent features that are not described. If you are ' +
-    'unsure, say so and point them to the relevant page or their accountant. For tax questions give ' +
-    'general educational guidance only, not personal financial or legal advice. ' +
-    'Always reply in ENGLISH, regardless of the language of the question.\n\n' +
+    'You are Enzo, the built-in AI assistant for the Successwa / Elite Client Hub web app. ' +
+    'When greeting or introducing yourself, say you are Enzo, the app\'s AI assistant. ' +
+    'You help users in two ways: (1) explain features and guide them through the exact step ' +
+    'they are on, and (2) answer questions about REAL data by calling the provided tools ' +
+    '(e.g. whether a client exists, a client\'s jobs, a job\'s status, or whether a client has ' +
+    'submitted their documents). Prefer calling a tool over guessing whenever the user asks about ' +
+    'specific clients, jobs or document status. If a tool returns an error or no match, say so plainly. ' +
+    'Never claim you lack database access — use the tools. Respect permissions: the tools already ' +
+    'enforce what this user is allowed to see; do not try to reveal other clients\' data to a client user. ' +
+    'Use the app handbook as your source of truth about how the app works; do not invent features. ' +
+    'For tax questions give general educational guidance only, not personal financial or legal advice. ' +
+    'STAY ON TOPIC: you only help with this app (Successwa / Elite Client Hub), its features, the firm\'s ' +
+    'clients/jobs/documents, and general Australian tax record-keeping. If the user asks anything unrelated ' +
+    '(e.g. general trivia, coding, other companies, jokes, personal chit-chat, current events), politely ' +
+    'decline in one short sentence and steer them back to what you can help with in the app. Do not answer ' +
+    'off-topic requests even if asked repeatedly. ' +
+    'Be concise. Always reply in ENGLISH, regardless of the language of the question.\n\n' +
     '=== APP HANDBOOK ===\n' + APP_KB + '\n' +
     '=== LIVE CONTEXT (where the user currently is) ===\n' + contextLines;
 
-  // Build Gemini "contents": prior turns + the new question, with a system instruction.
-  const contents = [];
+  // Build OpenAI-style messages: system + prior turns + the new question.
+  const messages = [{ role: 'system', content: systemPrompt }];
   history.forEach((m) => {
     if (!m || !m.text) return;
-    contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: String(m.text).slice(0, 2000) }] });
+    messages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.text).slice(0, 2000) });
   });
-  contents.push({ role: 'user', parts: [{ text: question }] });
+  messages.push({ role: 'user', content: question });
 
-  try {
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-      encodeURIComponent(GEMINI_MODEL) + ':generateContent?key=' + encodeURIComponent(apiKey);
+  // OpenAI-style tool declarations (wrap our shared ASSISTANT_TOOLS).
+  const tools = ASSISTANT_TOOLS.map((t) => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  }));
+
+  async function callModel() {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 25000);
-    const gr = await fetch(url, {
+    const timer = setTimeout(() => ctrl.abort(), 30000);
+    const gr = await fetch(OPENROUTER_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents: contents,
-        generationConfig: { temperature: 0.4, maxOutputTokens: 800 },
-      }),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + apiKey,
+        'HTTP-Referer': 'https://demo.kaiizen.ai',
+        'X-Title': 'Successwa Client Hub',
+      },
+      body: JSON.stringify({ model: AI_MODEL, messages: messages, tools: tools, temperature: 0.3, max_tokens: 900 }),
       signal: ctrl.signal,
     }).finally(() => clearTimeout(timer));
-
     if (!gr.ok) {
       const body = await gr.text().catch(() => '');
-      console.error('[assistant] Gemini HTTP', gr.status, body.slice(0, 300));
-      return res.status(502).json({ error: 'AI service error. Please try again.' });
+      console.error('[assistant] OpenRouter HTTP', gr.status, body.slice(0, 400));
+      throw new Error('openrouter_http_' + gr.status);
     }
-    const data = await gr.json();
-    const answer = (((data.candidates || [])[0] || {}).content || {}).parts &&
-      data.candidates[0].content.parts.map((p) => p.text || '').join('').trim();
-    if (!answer) return res.status(502).json({ error: 'No answer returned. Please rephrase and try again.' });
-    res.json({ ok: true, answer });
+    return gr.json();
+  }
+
+  try {
+    // Function-calling loop: let the model call tools (max 4 rounds), then answer.
+    for (let round = 0; round < 4; round++) {
+      const data = await callModel();
+      const msg = (((data.choices || [])[0] || {}).message) || {};
+      const toolCalls = msg.tool_calls || [];
+
+      if (toolCalls.length) {
+        // Record the assistant's tool-call turn, then append each tool result.
+        messages.push(msg);
+        for (const tc of toolCalls) {
+          let args = {};
+          try { args = JSON.parse((tc.function && tc.function.arguments) || '{}'); } catch (e) {}
+          const result = await runAssistantTool(tc.function && tc.function.name, args, user);
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) });
+        }
+        continue; // ask the model again with tool outputs
+      }
+
+      const answer = (msg.content || '').trim();
+      if (answer) return res.json({ ok: true, answer });
+      break;
+    }
+    return res.status(502).json({ error: 'No answer returned. Please rephrase and try again.' });
   } catch (e) {
     console.error('[assistant]', e && e.message);
     res.status(502).json({ error: 'AI request failed. Please try again.' });
   }
 });
+
 
 // Multer / generic error handler
 app.use(function (err, req, res, next) {
