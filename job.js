@@ -80,6 +80,17 @@
         '<td><button class="btn btn-xs" data-resend="' + n.id + '" data-tip="Send this notification again to the recipient.">Resend</button></td></tr>';
     }).join('') : '<tr><td colspan="5" class="muted small">No notifications sent.</td></tr>';
 
+    var meEmail = (auth.email || '').toLowerCase();
+    var notesHtml = (res.notes || []).length ? res.notes.map(function (n) {
+      var who = n.author_name || n.author || 'staff';
+      var canDelete = (String(n.author || '').toLowerCase() === meEmail) || auth.role === 'administrator';
+      return '<li>' +
+        '<div style="white-space:pre-wrap">' + esc(n.note) + '</div>' +
+        '<div class="t-meta">' + esc(who) + ' · ' + Hub.fmtDateTime(n.created_at) +
+        (canDelete ? ' · <a href="#" class="note-del" data-note="' + n.id + '" style="color:#c0392b">Delete</a>' : '') +
+        '</div></li>';
+    }).join('') : '<li class="muted small">No internal notes yet.</li>';
+
     var catOpts = Hub.DOC_CATEGORIES.map(function (c) { return '<option>' + c + '</option>'; }).join('');
     var isSup = auth.role === 'supervisor' || auth.role === 'administrator';
     var canAssign = auth.role === 'reception' || auth.role === 'supervisor' || auth.role === 'administrator';
@@ -148,6 +159,13 @@
       '<div class="section-title">Notifications</div>' +
       '<div class="card"><table class="hub-table"><thead><tr><th>Subject</th><th>To</th><th>Status</th><th>Date</th><th></th></tr></thead><tbody>' + notifHtml + '</tbody></table></div>' +
 
+      '<div class="section-title">Internal notes</div>' +
+      '<div class="card" data-tip-below data-tip="Private staff notes for this job. Clients never see these. Any staff member can add a note; only the author or an administrator can delete one.">' +
+        '<div class="field" style="margin-bottom:8px"><textarea id="noteInput" rows="3" placeholder="Add an internal note for the team (e.g. offshore prep progress, questions for the supervisor)…"></textarea></div>' +
+        '<button class="btn btn-primary btn-sm" id="noteBtn">Add note</button>' +
+        '<ul class="timeline" style="margin-top:14px">' + notesHtml + '</ul>' +
+      '</div>' +
+
       '<div class="section-title">Audit trail</div>' +
       '<div class="card"><ul class="timeline">' + histHtml + '</ul></div>';
 
@@ -157,6 +175,26 @@
 
   function bind(j) {
     var $ = function (id) { return document.getElementById(id); };
+
+    // ---- Internal notes ----
+    if ($('noteBtn')) $('noteBtn').addEventListener('click', function () {
+      var ta = $('noteInput');
+      var text = (ta.value || '').trim();
+      if (!text) { Hub.toast('Type a note first'); ta.focus(); return; }
+      Hub.busy($('noteBtn'), Nav.api('/api/jobs/' + jobId + '/notes', { method: 'POST', body: { note: text } }))
+        .then(function () { ta.value = ''; Hub.toast('Note added'); load(); })
+        .catch(function (e) { Hub.toast(e.message); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.note-del'), function (a) {
+      a.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        var id = a.getAttribute('data-note');
+        Nav.api('/api/jobs/' + jobId + '/notes/' + id, { method: 'DELETE' })
+          .then(function () { Hub.toast('Note deleted'); load(); })
+          .catch(function (e) { Hub.toast(e.message); });
+      });
+    });
+
     $('stageSel').addEventListener('change', function () {
       var sel = $('stageSel');
       var newStage = sel.value;

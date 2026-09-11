@@ -142,6 +142,16 @@ CREATE TABLE IF NOT EXISTS job_status_history (
 );
 CREATE INDEX IF NOT EXISTS idx_jsh_job ON job_status_history(job_id);
 
+-- Internal staff-only notes on a job (never shown to the client).
+CREATE TABLE IF NOT EXISTS job_notes (
+  id          SERIAL PRIMARY KEY,
+  job_id      TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  author      TEXT NOT NULL,
+  note        TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_job_notes_job ON job_notes(job_id);
+
 -- Uploaded documents (metadata; file bytes stored on disk under uploads/)
 CREATE TABLE IF NOT EXISTS documents (
   id          SERIAL PRIMARY KEY,

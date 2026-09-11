@@ -4,7 +4,10 @@
     ['01_created', '01 Job Created'],
     ['02_waiting_docs', '02 Waiting for Documents'],
     ['03_docs_received', '03 Documents Received'],
-    ['04_processing', '04 Accountant Processing'],
+    ['04_processing', '04 Offshore — Allocated'],
+    ['04b_started', '04 Offshore — In Progress'],
+    ['04c_waiting_info', '04 Offshore — Waiting for Info'],
+    ['04d_prep_complete', '04 Offshore — Prep Complete'],
     ['05_supervisor_review', '05 Supervisor Review'],
     ['06_awaiting_signature', '06 Awaiting Client Signature'],
     ['07_ready_lodgement', '07 Ready for Lodgement'],
@@ -34,7 +37,9 @@
     if (onHold) return 'On Hold';
     var map = {
       '01_created': 'Received', '02_waiting_docs': 'Action Required', '03_docs_received': 'In Progress',
-      '04_processing': 'In Progress', '05_supervisor_review': 'In Progress', '06_awaiting_signature': 'Action Required',
+      '04_processing': 'In Progress', '04b_started': 'In Progress', '04c_waiting_info': 'In Progress',
+      '04d_prep_complete': 'In Progress',
+      '05_supervisor_review': 'In Progress', '06_awaiting_signature': 'Action Required',
       '07_ready_lodgement': 'In Progress', '08_lodged': 'Lodged', '09_completed': 'Completed',
     };
     var s = map[stage] || 'In Progress';

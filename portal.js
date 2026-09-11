@@ -10,13 +10,35 @@
   function stepperHtml(steps, current) {
     if (!steps || !steps.length) return '';
     var cur = current || 1;
+    var last = steps.length;
     var dots = steps.map(function (label, i) {
       var n = i + 1;
-      var cls = n < cur ? 'done' : (n === cur ? 'active' : 'todo');
+      // The final step ("Completed") counts as done once reached, not merely active.
+      var isDone = n < cur || (n === cur && n === last);
+      var cls = isDone ? 'done' : (n === cur ? 'active' : 'todo');
       return '<li class="step step-' + cls + '"><span class="step-dot">' +
-        (n < cur ? '✓' : n) + '</span><span class="step-label">' + esc(label) + '</span></li>';
+        (isDone ? '✓' : n) + '</span><span class="step-label">' + esc(label) + '</span></li>';
     }).join('');
     return '<ol class="stepper">' + dots + '</ol>';
+  }
+
+  // Client-facing status for one of their uploaded documents. 'received' is the
+  // neutral default; 'verified' is positive; 'incorrect'/'info_required' need the
+  // client to act and show the team's note.
+  function docStatusCell(d) {
+    var s = d.status || 'received';
+    var map = {
+      received: { cls: 'pill-inprogress', label: 'Received' },
+      verified: { cls: 'pill-completed', label: 'Verified' },
+      incorrect: { cls: 'pill-action', label: 'Needs re-upload' },
+      info_required: { cls: 'pill-action', label: 'Info needed' }
+    };
+    var m = map[s] || map.received;
+    var html = '<span class="pill ' + m.cls + '">' + m.label + '</span>';
+    if ((s === 'incorrect' || s === 'info_required') && d.review_note) {
+      html += '<div class="small" style="color:var(--red);margin-top:3px;max-width:220px">' + esc(d.review_note) + '</div>';
+    }
+    return html;
   }
 
   Hub.guide('portal', auth.role, {
@@ -97,13 +119,14 @@
           return '<li>' + esc(r.description) + (r.due_date ? ' <span class="muted small">(due ' + Hub.fmtDate(r.due_date) + ')</span>' : '') + '</li>';
         }).join('') + '</ul>' : '<p class="muted small">Nothing outstanding right now.</p>') +
         '<div class="section-title">Your uploaded documents</div>' +
-        (docs.length ? '<table class="hub-table"><thead><tr><th>File</th><th>Category</th><th>Uploaded</th><th></th></tr></thead><tbody>' + docs.map(function (d) {
+        (docs.length ? '<table class="hub-table"><thead><tr><th>File</th><th>Category</th><th>Uploaded</th><th>Status</th><th></th></tr></thead><tbody>' + docs.map(function (d) {
           var mine = d.uploaded_by && auth.email && d.uploaded_by.toLowerCase() === auth.email.toLowerCase();
           var canPreview = /\.(pdf|jpe?g|png|gif|webp|heic|heif|txt)$/i.test(d.filename || '') ||
             /^(image\/|application\/pdf|text\/)/.test(d.mime || '');
           return '<tr><td style="word-break:break-all">' + esc(d.filename) + '</td>' +
             '<td class="muted small">' + esc(d.category) + '</td>' +
             '<td class="muted small">' + Hub.fmtDate(d.created_at) + '</td>' +
+            '<td>' + docStatusCell(d) + '</td>' +
             '<td style="white-space:nowrap">' +
             (canPreview ? '<button class="btn btn-xs" data-preview="' + d.id + '">Preview</button> ' : '') +
             '<a class="btn btn-xs" href="/api/documents/' + d.id + '/download" data-dl="' + d.id + '">Download</a>' +

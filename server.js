@@ -590,7 +590,7 @@ app.get('/api/jobs', requireAuth, requireRole.apply(null, STAFF), async (req, re
 // GET /api/jobs/:id  (full detail for staff)
 app.get('/api/jobs/:id', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
   try {
-    const [jr, hist, docs, reqs, notif] = await Promise.all([
+    const [jr, hist, docs, reqs, notif, notes] = await Promise.all([
       pool.query(
         `SELECT j.*, c.name AS client_name, c.email AS client_email, c.drive_folder_link,
                 e.entity_name, e.entity_type,
@@ -603,6 +603,7 @@ app.get('/api/jobs/:id', requireAuth, requireRole.apply(null, STAFF), async (req
       pool.query('SELECT * FROM documents WHERE job_id=$1 ORDER BY created_at DESC', [req.params.id]),
       pool.query('SELECT * FROM doc_requests WHERE job_id=$1 ORDER BY created_at DESC', [req.params.id]),
       pool.query('SELECT * FROM notifications WHERE job_id=$1 ORDER BY created_at DESC', [req.params.id]),
+      pool.query('SELECT jn.*, u.name AS author_name FROM job_notes jn LEFT JOIN users u ON lower(u.email)=lower(jn.author) WHERE jn.job_id=$1 ORDER BY jn.created_at DESC', [req.params.id]),
     ]);
     if (!jr.rows.length) return res.status(404).json({ error: 'job not found' });
     const job = jr.rows[0];
@@ -612,7 +613,7 @@ app.get('/api/jobs/:id', requireAuth, requireRole.apply(null, STAFF), async (req
     }
     job.stage_label = (wf.STAGE_MAP[job.stage] || {}).internalLabel || job.stage;
     job.next_action = wf.NEXT_ACTION[job.stage] || '';
-    res.json({ ok: true, job, history: hist.rows, documents: docs.rows, docRequests: reqs.rows, notifications: notif.rows, stages: wf.STAGES, stageMap: wf.STAGE_MAP });
+    res.json({ ok: true, job, history: hist.rows, documents: docs.rows, docRequests: reqs.rows, notifications: notif.rows, notes: notes.rows, stages: wf.STAGES, stageMap: wf.STAGE_MAP });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -864,6 +865,55 @@ app.patch('/api/documents/:id/status', requireAuth, requireRole.apply(null, STAF
     res.json({ ok: true, status });
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
   finally { client.release(); }
+});
+
+// ================= Internal notes (staff-only; never shown to clients) =================
+// GET /api/jobs/:id/notes — list notes (accountants only on their own jobs).
+app.get('/api/jobs/:id/notes', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    if (req.user.role === 'accountant') {
+      const own = await pool.query('SELECT 1 FROM jobs WHERE id=$1 AND lower(accountant_email)=lower($2)', [req.params.id, req.user.email]);
+      if (!own.rows.length) return res.status(403).json({ error: 'You can only view notes on your own jobs' });
+    }
+    const r = await pool.query(
+      'SELECT jn.*, u.name AS author_name FROM job_notes jn LEFT JOIN users u ON lower(u.email)=lower(jn.author) WHERE jn.job_id=$1 ORDER BY jn.created_at DESC',
+      [req.params.id]);
+    res.json({ ok: true, notes: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/jobs/:id/notes { note } — add an internal note.
+app.post('/api/jobs/:id/notes', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  const note = String(req.body.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'note required' });
+  if (note.length > 4000) return res.status(400).json({ error: 'note is too long' });
+  try {
+    const jr = await pool.query('SELECT id, accountant_email FROM jobs WHERE id=$1', [req.params.id]);
+    if (!jr.rows.length) return res.status(404).json({ error: 'job not found' });
+    if (req.user.role === 'accountant' && normAccount(jr.rows[0].accountant_email) !== normAccount(req.user.email)) {
+      return res.status(403).json({ error: 'You can only add notes to your own jobs' });
+    }
+    const ins = await pool.query(
+      'INSERT INTO job_notes (job_id, author, note) VALUES ($1,$2,$3) RETURNING id, created_at',
+      [req.params.id, req.user.email, note]);
+    await audit(pool, req.user.email, 'job.note_add', 'job', req.params.id, { noteId: ins.rows[0].id });
+    res.json({ ok: true, id: ins.rows[0].id, created_at: ins.rows[0].created_at });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/jobs/:id/notes/:noteId — remove a note (author or administrator only).
+app.delete('/api/jobs/:id/notes/:noteId', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    const nr = await pool.query('SELECT * FROM job_notes WHERE id=$1 AND job_id=$2', [req.params.noteId, req.params.id]);
+    if (!nr.rows.length) return res.status(404).json({ error: 'note not found' });
+    const isAuthor = normAccount(nr.rows[0].author) === normAccount(req.user.email);
+    if (!isAuthor && req.user.role !== 'administrator') {
+      return res.status(403).json({ error: 'only the author or an administrator can delete this note' });
+    }
+    await pool.query('DELETE FROM job_notes WHERE id=$1', [req.params.noteId]);
+    await audit(pool, req.user.email, 'job.note_delete', 'job', req.params.id, { noteId: req.params.noteId });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Notify helper: look up template + client email, send + log.
@@ -1394,7 +1444,7 @@ app.get('/api/portal/jobs/:id', requireAuth, requireRole('client'), async (req, 
     const j = jr.rows[0];
     const view = wf.clientView(j);
     const reqs = await pool.query("SELECT id, category, description, due_date, status FROM doc_requests WHERE job_id=$1 ORDER BY created_at DESC", [req.params.id]);
-    const docs = await pool.query('SELECT id, category, filename, uploaded_by, created_at FROM documents WHERE job_id=$1 ORDER BY created_at DESC', [req.params.id]);
+    const docs = await pool.query('SELECT id, category, filename, uploaded_by, created_at, status, review_note FROM documents WHERE job_id=$1 ORDER BY created_at DESC', [req.params.id]);
     res.json({ ok: true, job: {
       id: j.id, jobType: j.job_type, financialYear: j.financial_year,
       clientStatus: view.clientStatus, clientMessage: view.clientMessage, progressPct: view.progressPct, lastUpdate: j.updated_at,
@@ -1655,7 +1705,7 @@ const ASSISTANT_TOOLS = [
   },
   {
     name: 'my_jobs',
-    description: 'For a signed-in CLIENT: list the client\'s own jobs with plain-language status and whether documents are still needed. Use this when a client asks about their own jobs or documents.',
+    description: 'For a signed-in CLIENT: list the client\'s own jobs with plain-language status, the current progress step (1-6) and percent complete, and whether documents are still needed. Use this when a client asks about their own jobs, documents, or the progress/status of their work.',
     parameters: { type: 'object', properties: {} },
   },
   {
@@ -1754,9 +1804,10 @@ async function runAssistantTool(name, args, user) {
       if (role !== 'client') return { error: 'This tool is only for signed-in clients.' };
       const cr = await pool.query('SELECT id FROM clients WHERE lower(email)=$1', [normAccount(user.email)]);
       if (!cr.rows.length) return { jobCount: 0, jobs: [] };
+      const clientIds = cr.rows.map((r) => r.id);
       const jr = await pool.query(
-        'SELECT id, job_type, financial_year, stage, on_hold FROM jobs WHERE client_id=$1 ORDER BY updated_at DESC',
-        [cr.rows[0].id]);
+        'SELECT id, job_type, financial_year, stage, on_hold FROM jobs WHERE client_id = ANY($1) ORDER BY updated_at DESC',
+        [clientIds]);
       const jobs = [];
       for (const j of jr.rows) {
         const view = wf.clientView(j);
@@ -1764,6 +1815,9 @@ async function runAssistantTool(name, args, user) {
         jobs.push({
           jobId: j.id, type: j.job_type, financialYear: j.financial_year,
           status: view.clientStatus, documentsStillNeeded: rem.rows[0].n,
+          progressStep: view.clientStep, progressStepLabel: view.clientStepLabel,
+          totalSteps: Array.isArray(view.clientSteps) ? view.clientSteps.length : 6,
+          progressPercent: view.progressPct,
         });
       }
       return { jobCount: jobs.length, jobs: jobs };

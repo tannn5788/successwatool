@@ -6,8 +6,11 @@ const STAGES = [
   '01_created',
   '02_waiting_docs',
   '03_docs_received',
-  '04_processing',
-  '05_supervisor_review',
+  '04_processing',        // Allocated to offshore
+  '04b_started',          // Offshore started work
+  '04c_waiting_info',     // Offshore waiting on more info
+  '04d_prep_complete',    // Offshore finished prep
+  '05_supervisor_review', // Sent for review
   '06_awaiting_signature',
   '07_ready_lodgement',
   '08_lodged',
@@ -32,7 +35,10 @@ const STAGE_MAP = {
   '01_created':            { internalLabel: '01 Job Created',            clientStep: 1, clientStatus: 'Received',            clientMessage: 'We have created your job and will be in touch shortly.',                       notify: null },
   '02_waiting_docs':       { internalLabel: '02 Waiting for Documents',  clientStep: 1, clientStatus: 'Action Required',     clientMessage: 'We need some documents from you to get started.',                             notify: 'action_required' },
   '03_docs_received':      { internalLabel: '03 Documents Received',     clientStep: 2, clientStatus: 'In Progress',         clientMessage: 'Thanks — we have received your documents and started work.',                   notify: 'documents_received' },
-  '04_processing':         { internalLabel: '04 Accountant Processing',  clientStep: 3, clientStatus: 'In Progress',         clientMessage: 'Your accountant is currently preparing your work.',                           notify: null },
+  '04_processing':         { internalLabel: '04 Offshore — Allocated',      clientStep: 3, clientStatus: 'In Progress',         clientMessage: 'Your accountant is currently preparing your work.',                           notify: null },
+  '04b_started':           { internalLabel: '04 Offshore — In Progress',    clientStep: 3, clientStatus: 'In Progress',         clientMessage: 'Your accountant is currently preparing your work.',                           notify: null },
+  '04c_waiting_info':      { internalLabel: '04 Offshore — Waiting for Info', clientStep: 3, clientStatus: 'In Progress',       clientMessage: 'Your accountant is currently preparing your work.',                           notify: null },
+  '04d_prep_complete':     { internalLabel: '04 Offshore — Prep Complete',  clientStep: 3, clientStatus: 'In Progress',         clientMessage: 'Your accountant is currently preparing your work.',                           notify: null },
   '05_supervisor_review':  { internalLabel: '05 Supervisor Review',      clientStep: 4, clientStatus: 'In Progress',         clientMessage: 'Your work is being reviewed by a senior team member.',                        notify: 'supervisor_review' },
   '06_awaiting_signature': { internalLabel: '06 Awaiting Client Signature', clientStep: 5, clientStatus: 'Action Required', clientMessage: 'Your documents are ready — please review and sign.',                          notify: 'awaiting_signature' },
   '07_ready_lodgement':    { internalLabel: '07 Ready for Lodgement',    clientStep: 5, clientStatus: 'In Progress',         clientMessage: 'Everything is signed and ready to lodge.',                                    notify: null },
@@ -45,7 +51,10 @@ const NEXT_ACTION = {
   '01_created':            'Request documents from client',
   '02_waiting_docs':       'Wait for / follow up client documents',
   '03_docs_received':      'Assign & begin processing',
-  '04_processing':         'Complete work and submit for review',
+  '04_processing':         'Offshore to start work',
+  '04b_started':           'Offshore preparing the work',
+  '04c_waiting_info':      'Offshore waiting for more information',
+  '04d_prep_complete':     'Send to supervisor for review',
   '05_supervisor_review':  'Supervisor to approve or return',
   '06_awaiting_signature': 'Wait for client signature',
   '07_ready_lodgement':    'Lodge with ATO',
