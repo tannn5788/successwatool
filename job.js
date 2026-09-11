@@ -100,7 +100,9 @@
           (j.stage === '07_ready_lodgement' ? '<span class="pill pill-completed">Ready for lodgement</span>' : '') +
         '</div>' : '') +
 
-      '<div class="section-title">Documents</div>' +
+      '<div class="section-title">Documents' +
+        (j.drive_folder_link ? ' <a href="' + esc(j.drive_folder_link) + '" target="_blank" rel="noopener" class="btn btn-xs" style="vertical-align:middle;margin-left:8px" data-tip="Open this client\u2019s Google Drive backup folder in a new tab.">📁 Open Drive folder</a>' : '') +
+      '</div>' +
       '<div class="card">' +
         '<div class="field-row" style="align-items:end"><div class="field" style="margin-bottom:0" data-tip="Pick the category that best describes the file (e.g. Income, PAYG, Bank Statements)."><label>Category</label><select id="upCat">' + catOpts + '</select></div>' +
         '<div class="field" style="margin-bottom:0" data-tip="Choose a file to attach: PDF, image, or Office document."><label>File</label><input type="file" id="upFile" accept=".pdf,.jpg,.jpeg,.png,.heic,.heif,.doc,.docx,.xls,.xlsx,.csv,.txt"/></div></div>' +

@@ -19,6 +19,7 @@
     if (tab === 'users') return loadUsers();
     if (tab === 'templates') return loadTemplates();
     if (tab === 'audit') return loadAudit();
+    if (tab === 'integrations') return loadIntegrations();
   }
 
   // ---- Users ----
@@ -120,6 +121,65 @@
       panel.innerHTML = '<table class="hub-table"><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead><tbody>' + rows + '</tbody></table>';
     }).catch(function (e) { panel.innerHTML = '<p class="muted">Error: ' + esc(e.message) + '</p>'; });
   }
+
+  // ---- Integrations (Google Drive) ----
+  function loadIntegrations() {
+    panel.innerHTML = '<p class="muted">Loading…</p>';
+    Nav.api('/api/google/status').then(function (res) {
+      var s = res.status || {};
+      var body;
+      if (!s.configured) {
+        body = '<p class="muted">Google Drive is not configured on the server yet. ' +
+          'Add <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code> and ' +
+          '<code>GOOGLE_REDIRECT_URI</code> to the server environment, then reload.</p>';
+      } else if (s.connected) {
+        body = '<p><span class="pill pill-completed">Connected</span>' +
+          (s.email ? ' as <b>' + esc(s.email) + '</b>' : '') + '</p>' +
+          '<p class="muted small">Uploaded documents are backed up to the Google Drive folder ' +
+          '<b>' + esc(s.folderName || 'Successwa Documents') + '</b>, grouped by client.</p>' +
+          '<div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-sm danger" id="gdDisc">Disconnect</button></div>';
+      } else {
+        body = '<p><span class="pill pill-hold">Not connected</span></p>' +
+          '<p class="muted small">Connect the firm\u2019s Google account once. New uploads will then be ' +
+          'automatically backed up to Google Drive.</p>' +
+          '<div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-primary btn-sm" id="gdConn">Connect Google Drive</button></div>';
+      }
+      panel.innerHTML = '<div class="card" style="max-width:640px"><h3 style="margin-top:0">Google Drive</h3>' + body + '</div>';
+
+      var conn = document.getElementById('gdConn');
+      if (conn) conn.addEventListener('click', function () {
+        Hub.busy(conn, Nav.api('/api/google/auth-url')).then(function (r) {
+          window.location.href = r.url;
+        }).catch(function (e) { Hub.toast(e.message); });
+      });
+      var disc = document.getElementById('gdDisc');
+      if (disc) disc.addEventListener('click', function () {
+        var m = Hub.modal('Disconnect Google Drive',
+          '<p>Stop backing up new uploads to Google Drive? Existing files on Drive are not removed.</p>' +
+          '<div class="modal-actions"><button class="btn btn-ghost" id="dCancel">Cancel</button>' +
+          '<button class="btn danger" id="dOk">Disconnect</button></div>');
+        m.q('#dCancel').addEventListener('click', m.close);
+        m.q('#dOk').addEventListener('click', function () {
+          Hub.busy(m.q('#dOk'), Nav.api('/api/google/disconnect', { method: 'POST' }))
+            .then(function () { m.close(); Hub.toast('Disconnected'); loadIntegrations(); })
+            .catch(function (e) { Hub.toast(e.message); });
+        });
+      });
+    }).catch(function (e) { panel.innerHTML = '<p class="muted">Error: ' + esc(e.message) + '</p>'; });
+  }
+
+  // Handle the OAuth callback redirect (/admin?drive=connected|error): open the tab + toast.
+  (function () {
+    var m = /[?&]drive=([^&]+)/.exec(window.location.search);
+    if (!m) return;
+    var status = m[1];
+    // Clean the URL so a refresh doesn't repeat the toast.
+    try { history.replaceState(null, '', window.location.pathname); } catch (e) {}
+    var btn = document.querySelector('[data-tab="integrations"]');
+    if (btn) btn.click();
+    if (status === 'connected') Hub.toast('Google Drive connected');
+    else Hub.toast('Google Drive connection failed');
+  })();
 
   loadUsers();
 })();

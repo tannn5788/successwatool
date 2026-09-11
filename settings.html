@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Clients — Successwa Client Hub</title>
+<title>Security — Successwa</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Archivo:wght@500;600;700;800&family=Karla:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css?v=63" />
@@ -11,19 +11,13 @@
 </head>
 <body>
   <div id="topnav"></div>
-  <main class="hub">
-    <div class="hub-head">
-      <div><h1>Clients &amp; Entities</h1><p class="page-sub">Manage clients, their entities and create jobs</p></div>
-      <button class="btn btn-primary" id="newClientBtn">+ New Client</button>
-    </div>
-    <div class="hub-toolbar">
-      <input type="search" id="q" placeholder="Search client name, email or ID…" style="min-width:260px" />
-    </div>
-    <div id="listWrap"><p class="muted">Loading…</p></div>
+  <main class="hub" style="max-width:720px">
+    <div class="hub-head"><div><h1>Security</h1><p class="page-sub">Manage your sign-in and two-factor authentication</p></div></div>
+    <div id="panel"><p class="muted">Loading…</p></div>
   </main>
 <script src="nav.js?v=21"></script>
 <script src="hub-common.js?v=42"></script>
-<script src="clients.js?v=39"></script>
+<script src="settings.js?v=1"></script>
 <script src="assistant.js?v=5"></script>
 </body>
 </html>

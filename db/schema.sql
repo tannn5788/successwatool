@@ -17,6 +17,28 @@ CREATE TABLE IF NOT EXISTS users (
 -- Elite Client Hub: role + active flag on users
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'client';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+-- Multi-factor auth (added post-launch; safe to re-run)
+--   mfa_method: 'email' | 'totp' | NULL(off);  mfa_enabled: on/off
+--   mfa_secret: TOTP base32 secret (only for method='totp')
+--   mfa_pending_secret: TOTP secret staged during setup, before the user confirms
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_method TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_pending_secret TEXT;
+
+-- Short-lived MFA challenges: login step-2 and email-OTP enable flow.
+-- Stored in DB (not memory) so it works under the PM2 cluster on the VPS.
+CREATE TABLE IF NOT EXISTS mfa_challenges (
+  id          TEXT PRIMARY KEY,        -- random challenge id handed to the client
+  email       TEXT NOT NULL,
+  purpose     TEXT NOT NULL,           -- 'login' | 'enable_email'
+  method      TEXT NOT NULL,           -- 'email' | 'totp'
+  code_hash   TEXT,                    -- hashed email OTP (NULL for totp login)
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_challenges_email ON mfa_challenges(email);
 
 CREATE TABLE IF NOT EXISTS transactions (
   id           TEXT PRIMARY KEY,
@@ -55,6 +77,9 @@ CREATE TABLE IF NOT EXISTS clients (
   phone        TEXT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Google Drive: shareable link to the client's backup folder (added post-launch; safe to re-run)
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS drive_folder_id TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS drive_folder_link TEXT;
 
 -- Entities belonging to a client (unique Entity ID like EN-0001)
 CREATE TABLE IF NOT EXISTS entities (
@@ -118,6 +143,8 @@ CREATE TABLE IF NOT EXISTS documents (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_docs_job ON documents(job_id);
+-- Google Drive backup: id of the mirrored file on Drive (added post-launch; safe to re-run)
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS drive_file_id TEXT;
 
 -- Outstanding document requests
 CREATE TABLE IF NOT EXISTS doc_requests (
@@ -176,4 +203,13 @@ CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 CREATE TABLE IF NOT EXISTS id_counters (
   name    TEXT PRIMARY KEY,
   value   BIGINT NOT NULL DEFAULT 0
+);
+
+-- Generic app settings (key/value). Used for Google Drive OAuth refresh token,
+-- connected account email, cached Drive root folder id, etc.
+CREATE TABLE IF NOT EXISTS app_settings (
+  key         TEXT PRIMARY KEY,
+  value       TEXT,
+  updated_by  TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

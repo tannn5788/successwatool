@@ -64,12 +64,14 @@
       links = [
         ['portal.html', 'My Jobs'],
         ['personal.html', 'Tax Tracker'],
+        ['settings.html', 'Security'],
         ['help.html', 'Help'],
       ];
     } else {
       links = [['dashboard.html', 'Dashboard'], ['clients.html', 'Clients']];
       if (a.role === 'supervisor') links.push(['review.html', 'Review Queue']);
       if (a.role === 'administrator') links.push(['admin.html', 'Admin']);
+      links.push(['settings.html', 'Security']);
       links.push(['help.html', 'Help']);
     }
     var el = document.getElementById('topnav');

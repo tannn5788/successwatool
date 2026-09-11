@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Archivo:wght@500;600;700;800&family=Karla:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=62" />
+<link rel="stylesheet" href="styles.css?v=63" />
 <link rel="icon" href="logo.png?v=9">
 <style>
   /* Hallmark · redesign: login · genre: editorial · theme: project (black/red/brass)
@@ -226,6 +226,7 @@
     }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         if (!res.ok) throw new Error(res.j.error || 'Something went wrong');
+        if (res.j.mfaRequired) { showMfaStep(res.j); return; }
         localStorage.setItem('successwa.auth', JSON.stringify({
           email: res.j.email, name: res.j.name || '', role: res.j.role || 'client', token: res.j.token
         }));
@@ -236,6 +237,49 @@
         btn.disabled = false;
       });
   });
+  function saveAndGo(j) {
+    localStorage.setItem('successwa.auth', JSON.stringify({
+      email: j.email, name: j.name || '', role: j.role || 'client', token: j.token
+    }));
+    msg('Success — redirecting…', 'ok');
+    setTimeout(function () { location.href = homeFor(j.role || 'client'); }, 500);
+  }
+
+  // ---- MFA second step (shown after correct password when 2FA is on) ----
+  function showMfaStep(info) {
+    var form = $('authForm');
+    var toggle = document.querySelector('.auth-toggle.login-only');
+    if (toggle) toggle.style.display = 'none';
+    $('authEyebrow').textContent = 'Verification';
+    $('authTitle').textContent = 'Enter your code';
+    $('authSub').textContent = info.method === 'email'
+      ? 'We emailed a 6-digit code to ' + (info.maskedEmail || 'your email') + '.'
+      : 'Open your authenticator app and enter the 6-digit code.';
+    form.innerHTML =
+      '<div class="auth-field">' +
+        '<label for="fCode">6-digit code</label>' +
+        '<input type="text" id="fCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" required />' +
+      '</div>' +
+      '<div class="auth-msg" id="authMsg"></div>' +
+      '<button type="submit" class="btn btn-primary btn-block" id="verifyBtn">Verify &amp; sign in</button>';
+    var codeInput = $('fCode');
+    codeInput.focus();
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var code = codeInput.value.trim();
+      if (!/^\d{6}$/.test(code)) { msg('Enter the 6-digit code.', 'err'); return; }
+      var vb = $('verifyBtn'); vb.disabled = true; msg('Verifying…', '');
+      fetch('/api/login/verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeId: info.challengeId, code: code })
+      }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.j.error || 'Verification failed');
+          saveAndGo(res.j);
+        }).catch(function (err) { msg(err.message, 'err'); vb.disabled = false; });
+    });
+  }
 })();
 </script>
 </body>

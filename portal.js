@@ -175,7 +175,14 @@
       var fd = new FormData();
       fd.append('file', f); fd.append('jobId', jobId); fd.append('category', m.q('#pCat').value);
       Hub.busy(m.q('#pUp'), Nav.api('/api/documents/upload', { method: 'POST', body: fd }))
-        .then(function () { m.close(); Hub.toast('Uploaded — thank you!'); load(); })
+        .then(function () {
+          Hub.toast('Uploaded — thank you! You can add another.');
+          // Keep the upload panel open so the client can add more files.
+          // Reset only the file picker (category stays as chosen).
+          var fileInput = m.q('#pFile');
+          if (fileInput) fileInput.value = '';
+          load(); // refresh the underlying job list/counts in the background
+        })
         .catch(function (e) { Hub.toast(e.message); });
     });
   }

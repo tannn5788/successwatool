@@ -11,12 +11,34 @@ const compression = require('compression');
 const { Pool } = require('pg');
 const wf = require('./workflow');
 const { sendNotification } = require('./notify');
+const gdrive = require('./google-drive');
+const mfa = require('./mfa');
 
 // Fire-and-forget notification: never blocks the HTTP response. The row is still
 // written to the notifications table inside sendNotification; we just don't await it.
 function notifyBg(opts) {
   Promise.resolve().then(() => sendNotification(pool, opts))
     .catch((e) => console.error('[notify]', (e && e.message) || e));
+}
+
+// Fire-and-forget Google Drive backup of an uploaded document. Never blocks the
+// HTTP response and never breaks the upload flow if Drive is down/not connected.
+// On success, records the Drive file id back on the documents row.
+function driveBackupBg(docId, clientId, opts) {
+  Promise.resolve().then(async () => {
+    if (!gdrive.isConfigured()) return;            // no OAuth env -> skip silently
+    if (!(await gdrive.isConnected(pool))) return; // firm hasn't connected Drive -> skip
+    const r = await gdrive.uploadFileToDrive(pool, opts);
+    if (r && r.fileId && docId) {
+      await pool.query('UPDATE documents SET drive_file_id=$1 WHERE id=$2', [r.fileId, docId]);
+    }
+    // Cache the shareable client-folder link on the client so staff can open it from a job.
+    if (r && r.folderLink && clientId) {
+      await pool.query(
+        'UPDATE clients SET drive_folder_id=$1, drive_folder_link=$2 WHERE id=$3',
+        [r.folderId || null, r.folderLink, clientId]);
+    }
+  }).catch((e) => console.error('[drive backup]', (e && e.message) || e));
 }
 
 const pool = new Pool({
@@ -83,6 +105,16 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const APPS = ['personal', 'business'];
 function validApp(a) { return APPS.indexOf(a) !== -1; }
 function normAccount(a) { return String(a || '').trim().toLowerCase(); }
+
+// Mask an email for display in the MFA prompt, e.g. "jane.doe@x.com" -> "j****e@x.com".
+function maskEmail(email) {
+  const s = String(email || '');
+  const at = s.indexOf('@');
+  if (at <= 0) return s;
+  const local = s.slice(0, at), domain = s.slice(at);
+  if (local.length <= 2) return local[0] + '*' + domain;
+  return local[0] + '****' + local[local.length - 1] + domain;
+}
 
 // ---- Human-readable sequential IDs (CL-0001, EN-0001, JB-0001) ----
 async function nextId(client, name, prefix) {
@@ -182,17 +214,63 @@ app.post('/api/login', async (req, res) => {
   const password = String(req.body.password || '');
   if (!email || !password) return res.status(400).json({ error: 'email and password required' });
   try {
-    const r = await pool.query('SELECT email, name, role, active, pass_hash, pass_salt FROM users WHERE email=$1', [email]);
+    const r = await pool.query(
+      'SELECT email, name, role, active, pass_hash, pass_salt, mfa_enabled, mfa_method, mfa_secret FROM users WHERE email=$1',
+      [email]);
     if (!r.rows.length) return res.status(401).json({ error: 'incorrect email or password' });
     const u = r.rows[0];
     if (!(await verifyPassword(password, u.pass_salt, u.pass_hash))) {
       return res.status(401).json({ error: 'incorrect email or password' });
     }
     if (!u.active) return res.status(403).json({ error: 'this account has been disabled' });
+
+    // ---- Password OK. If MFA is enabled, require a second factor. ----
+    if (u.mfa_enabled && u.mfa_method) {
+      mfa.purgeExpired(pool);
+      if (u.mfa_method === 'email') {
+        const code = mfa.sixDigitCode();
+        const challengeId = await mfa.createChallenge(pool, { email: u.email, purpose: 'login', method: 'email', code });
+        notifyBg({
+          toEmail: u.email,
+          rawSubject: 'Your Successwa sign-in code',
+          rawBody: 'Your verification code is ' + code + '\n\nIt expires in 10 minutes. If you did not try to sign in, you can ignore this email.',
+        });
+        return res.json({ ok: true, mfaRequired: true, method: 'email', challengeId, maskedEmail: maskEmail(u.email) });
+      }
+      // totp
+      const challengeId = await mfa.createChallenge(pool, { email: u.email, purpose: 'login', method: 'totp', code: null });
+      return res.json({ ok: true, mfaRequired: true, method: 'totp', challengeId });
+    }
+
+    // No MFA — issue the session token directly.
     const token = await createSession(u.email, u.role);
     res.json({ ok: true, email: u.email, name: u.name, role: u.role, token });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// POST /api/login/verify { challengeId, code } — complete an MFA login.
+app.post('/api/login/verify', async (req, res) => {
+  const challengeId = String(req.body.challengeId || '');
+  const code = String(req.body.code || '').trim();
+  if (!challengeId || !code) return res.status(400).json({ error: 'code required' });
+  try {
+    // For TOTP we need the user's stored secret; look it up via the challenge's email.
+    const cr = await pool.query('SELECT * FROM mfa_challenges WHERE id=$1', [challengeId]);
+    if (!cr.rows.length) return res.status(400).json({ error: 'This verification request is invalid or has expired.' });
+    const email = cr.rows[0].email;
+    const ur = await pool.query('SELECT email, name, role, active, mfa_secret FROM users WHERE email=$1', [email]);
+    if (!ur.rows.length) return res.status(400).json({ error: 'account not found' });
+    const u = ur.rows[0];
+
+    const result = await mfa.verifyChallenge(pool, { id: challengeId, code, totpSecret: u.mfa_secret });
+    if (!result.ok) return res.status(401).json({ error: result.error });
+    if (!u.active) return res.status(403).json({ error: 'this account has been disabled' });
+
+    const token = await createSession(u.email, u.role);
+    res.json({ ok: true, email: u.email, name: u.name, role: u.role, token });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 // POST /api/logout
 app.post('/api/logout', requireAuth, async (req, res) => {
@@ -204,6 +282,88 @@ app.post('/api/logout', requireAuth, async (req, res) => {
 
 // GET /api/me
 app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true, user: req.user }));
+
+// ================= MFA (self-service, any logged-in user) =================
+// GET current MFA status for the logged-in user.
+app.get('/api/mfa/status', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT mfa_enabled, mfa_method FROM users WHERE email=$1', [normAccount(req.user.email)]);
+    const u = r.rows[0] || {};
+    res.json({ ok: true, enabled: !!u.mfa_enabled, method: u.mfa_enabled ? u.mfa_method : null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/mfa/setup { method: 'email' | 'totp' } — begin enabling MFA.
+//  - email: sends a 6-digit code to the user's email; returns a challengeId.
+//  - totp : generates a secret (stored as pending) + QR code to scan.
+app.post('/api/mfa/setup', requireAuth, async (req, res) => {
+  const method = String(req.body.method || '').trim();
+  const email = normAccount(req.user.email);
+  if (method !== 'email' && method !== 'totp') return res.status(400).json({ error: 'invalid method' });
+  try {
+    mfa.purgeExpired(pool);
+    if (method === 'email') {
+      const code = mfa.sixDigitCode();
+      const challengeId = await mfa.createChallenge(pool, { email, purpose: 'enable_email', method: 'email', code });
+      notifyBg({
+        toEmail: email,
+        rawSubject: 'Confirm two-factor authentication',
+        rawBody: 'Your confirmation code is ' + code + '\n\nEnter it in Successwa to turn on email two-factor authentication. It expires in 10 minutes.',
+      });
+      return res.json({ ok: true, method: 'email', challengeId, maskedEmail: maskEmail(email) });
+    }
+    // totp: stage a pending secret, return QR for the authenticator app.
+    const secret = mfa.generateTotpSecret();
+    await pool.query('UPDATE users SET mfa_pending_secret=$1 WHERE email=$2', [secret, email]);
+    const { otpauth, qr } = await mfa.totpQrDataUrl(email, secret);
+    res.json({ ok: true, method: 'totp', qr, secret, otpauth });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/mfa/enable { method, code, challengeId? } — confirm & switch MFA on.
+app.post('/api/mfa/enable', requireAuth, async (req, res) => {
+  const method = String(req.body.method || '').trim();
+  const code = String(req.body.code || '').trim();
+  const email = normAccount(req.user.email);
+  if (!code) return res.status(400).json({ error: 'code required' });
+  try {
+    if (method === 'email') {
+      const challengeId = String(req.body.challengeId || '');
+      const result = await mfa.verifyChallenge(pool, { id: challengeId, code });
+      if (!result.ok) return res.status(400).json({ error: result.error });
+      await pool.query(
+        "UPDATE users SET mfa_enabled=true, mfa_method='email', mfa_secret=NULL, mfa_pending_secret=NULL WHERE email=$1",
+        [email]);
+      await audit(pool, email, 'mfa.enable', 'user', email, { method: 'email' });
+      return res.json({ ok: true, enabled: true, method: 'email' });
+    }
+    if (method === 'totp') {
+      const pr = await pool.query('SELECT mfa_pending_secret FROM users WHERE email=$1', [email]);
+      const secret = pr.rows.length ? pr.rows[0].mfa_pending_secret : null;
+      if (!secret) return res.status(400).json({ error: 'Please restart setup — no pending secret found.' });
+      if (!mfa.verifyTotp(secret, code)) return res.status(400).json({ error: 'Incorrect code. Make sure your device time is correct and try again.' });
+      await pool.query(
+        "UPDATE users SET mfa_enabled=true, mfa_method='totp', mfa_secret=$1, mfa_pending_secret=NULL WHERE email=$2",
+        [secret, email]);
+      await audit(pool, email, 'mfa.enable', 'user', email, { method: 'totp' });
+      return res.json({ ok: true, enabled: true, method: 'totp' });
+    }
+    res.status(400).json({ error: 'invalid method' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/mfa/disable — turn MFA off for the logged-in user.
+app.post('/api/mfa/disable', requireAuth, async (req, res) => {
+  const email = normAccount(req.user.email);
+  try {
+    await pool.query(
+      'UPDATE users SET mfa_enabled=false, mfa_method=NULL, mfa_secret=NULL, mfa_pending_secret=NULL WHERE email=$1',
+      [email]);
+    await audit(pool, email, 'mfa.disable', 'user', email, null);
+    res.json({ ok: true, enabled: false });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 // ================= CLIENTS & ENTITIES (staff) =================
 app.get('/api/clients', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
@@ -349,7 +509,8 @@ app.get('/api/jobs/:id', requireAuth, requireRole.apply(null, STAFF), async (req
   try {
     const [jr, hist, docs, reqs, notif] = await Promise.all([
       pool.query(
-        `SELECT j.*, c.name AS client_name, c.email AS client_email, e.entity_name, e.entity_type,
+        `SELECT j.*, c.name AS client_name, c.email AS client_email, c.drive_folder_link,
+                e.entity_name, e.entity_type,
                 ua.name AS accountant_name, us.name AS supervisor_name
          FROM jobs j JOIN clients c ON c.id=j.client_id
          LEFT JOIN entities e ON e.id=j.entity_id
@@ -671,6 +832,60 @@ const upload = multer({
 
 app.get('/api/doc-categories', requireAuth, (req, res) => res.json({ ok: true, categories: DOC_CATEGORIES }));
 
+// ================= GOOGLE DRIVE (firm-wide OAuth) =================
+// The firm connects ONE Google account once; refresh token is stored server-side.
+// Connect/disconnect/status are administrator-only. The OAuth callback is a
+// browser redirect from Google (no Bearer header), so it is protected by a
+// one-time random `state` value instead.
+const K_OAUTH_STATE = 'google_drive.oauth_state';
+
+app.get('/api/google/status', requireAuth, requireRole('administrator'), async (req, res) => {
+  try { res.json({ ok: true, status: await gdrive.getStatus(pool) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Returns the Google consent URL for the admin UI to redirect to (window.location).
+app.get('/api/google/auth-url', requireAuth, requireRole('administrator'), async (req, res) => {
+  try {
+    if (!gdrive.isConfigured()) return res.status(400).json({ error: 'Google OAuth is not configured on the server (.env).' });
+    const state = crypto.randomBytes(16).toString('hex');
+    await pool.query(
+      `INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ($1,$2,$3, now())
+       ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`,
+      [K_OAUTH_STATE, state, req.user.email]);
+    const url = gdrive.getAuthUrl() + '&state=' + encodeURIComponent(state);
+    res.json({ ok: true, url });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Google redirects the browser here with ?code=&state=. Public route + state check.
+app.get('/api/google/callback', async (req, res) => {
+  const code = String(req.query.code || '');
+  const state = String(req.query.state || '');
+  try {
+    const saved = await pool.query('SELECT value FROM app_settings WHERE key=$1', [K_OAUTH_STATE]);
+    const expected = saved.rows.length ? saved.rows[0].value : null;
+    if (!code || !state || !expected || state !== expected) {
+      return res.redirect(302, '/admin?drive=error');
+    }
+    await pool.query('DELETE FROM app_settings WHERE key=$1', [K_OAUTH_STATE]);
+    await gdrive.saveTokensFromCode(pool, code, 'oauth-callback');
+    res.redirect(302, '/admin?drive=connected');
+  } catch (e) {
+    console.error('[google callback]', e.message);
+    res.redirect(302, '/admin?drive=error');
+  }
+});
+
+app.post('/api/google/disconnect', requireAuth, requireRole('administrator'), async (req, res) => {
+  try {
+    await gdrive.disconnect(pool);
+    await audit(pool, req.user.email, 'google_drive.disconnect', 'app_settings', 'google_drive', null);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
 // Both staff and the owning client can upload.
 app.post('/api/documents/upload', requireAuth, upload.single('file'), async (req, res) => {
   const jobId = String(req.body.jobId || '').trim();
@@ -687,12 +902,25 @@ app.post('/api/documents/upload', requireAuth, upload.single('file'), async (req
     if (req.user.role === 'client' && normAccount(job.client_email) !== normAccount(req.user.email)) {
       await client.query('ROLLBACK'); return res.status(403).json({ error: 'not your job' });
     }
-    await client.query(
+    const ins = await client.query(
       `INSERT INTO documents (job_id, client_id, entity_id, category, filename, stored_path, mime, size, uploaded_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
       [jobId, job.client_id, job.entity_id, category, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.email]);
+    const docId = ins.rows[0].id;
     await audit(client, req.user.email, 'document.upload', 'job', jobId, { category, filename: req.file.originalname });
     await client.query('COMMIT');
+
+    // Back up to Google Drive (no-op if not connected). Group by client, with the
+    // client's email as the folder prefix for easy identification.
+    const driveSubfolder = job.client_email
+      ? job.client_email + ' - ' + job.client_id
+      : job.client_id;
+    driveBackupBg(docId, job.client_id, {
+      localPath: path.join(UPLOAD_DIR, req.file.filename),
+      filename: req.file.originalname,
+      mime: req.file.mimetype,
+      subfolder: driveSubfolder,
+    });
 
     // If the CLIENT uploaded, let the assigned accountant know so they can action it (background).
     if (req.user.role === 'client' && job.accountant_email) {
@@ -962,11 +1190,12 @@ app.get('/api/portal/jobs', requireAuth, requireRole('client'), async (req, res)
   try {
     const cr = await pool.query('SELECT id, name FROM clients WHERE lower(email)=$1', [normAccount(req.user.email)]);
     if (!cr.rows.length) return res.json({ ok: true, jobs: [], clientId: null });
-    const clientId = cr.rows[0].id;
+    const clientIds = cr.rows.map((r) => r.id);
+    const clientId = clientIds[0];
     const jr = await pool.query(
       `SELECT j.id, j.job_type, j.financial_year, j.stage, j.on_hold, j.action_required, j.updated_at,
               e.entity_name FROM jobs j LEFT JOIN entities e ON e.id=j.entity_id
-       WHERE j.client_id=$1 ORDER BY j.updated_at DESC`, [clientId]);
+       WHERE j.client_id = ANY($1) ORDER BY j.updated_at DESC`, [clientIds]);
     const jobs = [];
     for (const j of jr.rows) {
       const view = wf.clientView(j);
@@ -986,7 +1215,8 @@ app.get('/api/portal/jobs/:id', requireAuth, requireRole('client'), async (req, 
   try {
     const cr = await pool.query('SELECT id FROM clients WHERE lower(email)=$1', [normAccount(req.user.email)]);
     if (!cr.rows.length) return res.status(404).json({ error: 'no client profile' });
-    const jr = await pool.query('SELECT * FROM jobs WHERE id=$1 AND client_id=$2', [req.params.id, cr.rows[0].id]);
+    const clientIds = cr.rows.map((r) => r.id);
+    const jr = await pool.query('SELECT * FROM jobs WHERE id=$1 AND client_id = ANY($2)', [req.params.id, clientIds]);
     if (!jr.rows.length) return res.status(404).json({ error: 'job not found' });
     const j = jr.rows[0];
     const view = wf.clientView(j);
@@ -1005,11 +1235,12 @@ app.delete('/api/portal/documents/:id', requireAuth, requireRole('client'), asyn
   try {
     const cr = await pool.query('SELECT id FROM clients WHERE lower(email)=$1', [normAccount(req.user.email)]);
     if (!cr.rows.length) return res.status(404).json({ error: 'no client profile' });
+    const clientIds = cr.rows.map((r) => r.id);
     const r = await pool.query('SELECT * FROM documents WHERE id=$1', [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'document not found' });
     const doc = r.rows[0];
     // Must belong to this client AND have been uploaded by this client.
-    if (doc.client_id !== cr.rows[0].id || normAccount(doc.uploaded_by) !== normAccount(req.user.email)) {
+    if (clientIds.indexOf(doc.client_id) === -1 || normAccount(doc.uploaded_by) !== normAccount(req.user.email)) {
       return res.status(403).json({ error: 'you can only delete documents you uploaded' });
     }
     await pool.query('DELETE FROM documents WHERE id=$1', [req.params.id]);
@@ -1026,7 +1257,8 @@ app.post('/api/portal/jobs/:id/sign', requireAuth, requireRole('client'), async 
     await client.query('BEGIN');
     const cr = await client.query('SELECT id FROM clients WHERE lower(email)=$1', [normAccount(req.user.email)]);
     if (!cr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'no client profile' }); }
-    const jr = await client.query('SELECT * FROM jobs WHERE id=$1 AND client_id=$2 FOR UPDATE', [req.params.id, cr.rows[0].id]);
+    const clientIds = cr.rows.map((r) => r.id);
+    const jr = await client.query('SELECT * FROM jobs WHERE id=$1 AND client_id = ANY($2) FOR UPDATE', [req.params.id, clientIds]);
     if (!jr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'job not found' }); }
     const job = jr.rows[0];
     if (job.stage !== '06_awaiting_signature') { await client.query('ROLLBACK'); return res.status(400).json({ error: 'this job is not awaiting your signature' }); }
