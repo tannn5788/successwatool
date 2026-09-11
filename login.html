@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Archivo:wght@500;600;700;800&family=Karla:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=63" />
+<link rel="stylesheet" href="styles.css?v=64" />
 <link rel="icon" href="logo.png?v=9">
 <style>
   /* Hallmark · redesign: login · genre: editorial · theme: project (black/red/brass)
@@ -161,6 +161,7 @@
           <div class="auth-field">
             <label for="fPass">Password</label>
             <input type="password" id="fPass" placeholder="••••••••" autocomplete="current-password" required />
+            <div class="login-only" style="text-align:right;margin-top:6px"><a id="toForgot" style="font-size:12.5px;color:var(--green-text);font-weight:600;cursor:pointer">Forgot password?</a></div>
           </div>
 
           <div class="auth-msg" id="authMsg"></div>
@@ -205,6 +206,37 @@
 
   $('toRegister').addEventListener('click', function () { setMode(true); });
   $('toLogin').addEventListener('click', function () { setMode(false); });
+  var forgotLink = $('toForgot');
+  if (forgotLink) forgotLink.addEventListener('click', function () {
+    var toggle = document.querySelector('.auth-toggle.login-only');
+    if (toggle) toggle.style.display = 'none';
+    $('authEyebrow').textContent = 'Reset password';
+    $('authTitle').textContent = 'Forgot your password?';
+    $('authSub').textContent = 'Enter your account email and we will send you a reset link.';
+    var form = $('authForm');
+    form.innerHTML =
+      '<div class="auth-field"><label for="fFemail">Email</label>' +
+      '<input type="email" id="fFemail" placeholder="you@example.com" autocomplete="email" required /></div>' +
+      '<div class="auth-msg" id="authMsg"></div>' +
+      '<button type="submit" class="btn btn-primary btn-block" id="forgotBtn">Send reset link</button>' +
+      '<p class="auth-toggle" style="text-align:center"><a id="backToLogin">Back to sign in</a></p>';
+    var femail = $('fFemail'); femail.focus();
+    $('backToLogin').addEventListener('click', function () { location.reload(); });
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var email = femail.value.trim().toLowerCase();
+      if (!email || email.indexOf('@') === -1) { msg('Enter a valid email.', 'err'); return; }
+      var fb = $('forgotBtn'); fb.disabled = true; msg('Sending...', '');
+      fetch('/api/forgot-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.j.error || 'Something went wrong');
+          msg('If an account exists for that email, a reset link is on its way. Check your inbox.', 'ok');
+        }).catch(function (err) { msg(err.message, 'err'); fb.disabled = false; });
+    });
+  });
 
   $('authForm').addEventListener('submit', function (e) {
     e.preventDefault();

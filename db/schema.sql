@@ -40,6 +40,18 @@ CREATE TABLE IF NOT EXISTS mfa_challenges (
 );
 CREATE INDEX IF NOT EXISTS idx_mfa_challenges_email ON mfa_challenges(email);
 
+-- Password reset tokens: forgot-password + admin-triggered reset.
+-- Token is stored hashed; single-use (consumed on success); short TTL.
+CREATE TABLE IF NOT EXISTS password_resets (
+  id          TEXT PRIMARY KEY,        -- random reset id (part of the link)
+  email       TEXT NOT NULL,
+  token_hash  TEXT NOT NULL,           -- hashed secret token
+  used        BOOLEAN NOT NULL DEFAULT false,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_password_resets_email ON password_resets(email);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id           TEXT PRIMARY KEY,
   account      TEXT NOT NULL,
@@ -115,6 +127,8 @@ CREATE INDEX IF NOT EXISTS idx_jobs_stage ON jobs(stage);
 -- Client e-signature tracking (added post-launch; safe to re-run)
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS signed_by TEXT;
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ;
+-- Job deadline (added post-launch; safe to re-run)
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS due_date DATE;
 
 -- Stage change history (audit of workflow transitions)
 CREATE TABLE IF NOT EXISTS job_status_history (
@@ -145,6 +159,12 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE INDEX IF NOT EXISTS idx_docs_job ON documents(job_id);
 -- Google Drive backup: id of the mirrored file on Drive (added post-launch; safe to re-run)
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS drive_file_id TEXT;
+-- Document verification (added post-launch; safe to re-run)
+--   status: 'received' (default) | 'verified' | 'incorrect' | 'info_required'
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'received';
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS verified_by TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_note TEXT;
 
 -- Outstanding document requests
 CREATE TABLE IF NOT EXISTS doc_requests (

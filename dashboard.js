@@ -61,6 +61,15 @@
       var pill = Hub.pillClass(cs);
       var rowTint = (pill.split(' ')[1] || 'pill-inprogress').replace('pill-', 'row-');
       var rowCls = ' class="' + rowTint + '"';
+      var dueCell = '<span class="muted small">—</span>';
+      if (j.due_date) {
+        var t0 = new Date(); t0.setHours(0, 0, 0, 0);
+        var dd = new Date((j.due_date || '').slice(0, 10) + 'T00:00:00');
+        var dleft = Math.round((dd - t0) / 86400000);
+        var doneJob = j.stage === '09_completed';
+        var dueCls = (!doneJob && dleft < 0) ? 'day-pill day-hot' : ((!doneJob && dleft <= 3) ? 'day-pill day-warn' : 'muted small');
+        dueCell = '<span class="' + dueCls + '">' + Hub.fmtDate(j.due_date) + '</span>';
+      }
       return '<tr data-id="' + esc(j.id) + '"' + rowCls + '>' +
         '<td><strong>' + esc(j.client_name) + '</strong><br><span class="muted small">' + esc(j.client_id) + '</span></td>' +
         '<td><span class="job-tag">' + esc(j.id) + '</span><br><span class="muted small">' + esc(j.job_type || '') + '</span></td>' +
@@ -68,13 +77,14 @@
         '<td class="small">' + esc(j.supervisor_name || j.supervisor_email || '—') + '</td>' +
         '<td><span class="' + Hub.pillClass(cs) + '">' + esc(cs) + '</span>' + flags + '<br><span class="muted small">' + esc(j.stage_label) + '</span></td>' +
         '<td><span class="' + dayCls + '">' + days + 'd</span></td>' +
+        '<td>' + dueCell + '</td>' +
         '<td class="small next-action">' + esc(j.next_action) + '</td>' +
         '</tr>';
     }).join('');
     $('tableWrap').innerHTML =
       '<div class="card" style="padding:0;overflow:hidden">' +
       '<table class="hub-table dash-table"><thead><tr>' +
-      '<th>Client</th><th>Job</th><th>Accountant</th><th>Supervisor</th><th>Status</th><th>Days</th><th>Next Action</th>' +
+      '<th>Client</th><th>Job</th><th>Accountant</th><th>Supervisor</th><th>Status</th><th>Days</th><th>Due</th><th>Next Action</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
     Array.prototype.forEach.call($('tableWrap').querySelectorAll('tr[data-id]'), function (tr) {
       tr.addEventListener('click', function () { location.href = 'job.html?id=' + encodeURIComponent(tr.getAttribute('data-id')); });

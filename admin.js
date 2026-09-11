@@ -34,6 +34,7 @@
           '<td>' + roleSel + '</td>' +
           '<td>' + (u.active ? '<span class="pill pill-completed">active</span>' : '<span class="pill pill-hold">disabled</span>') + '</td>' +
           '<td><button class="btn btn-xs" data-toggle="' + esc(u.email) + '|' + (u.active ? '0' : '1') + '">' + (u.active ? 'Disable' : 'Enable') + '</button>' +
+          ' <button class="btn btn-xs" data-reset="' + esc(u.email) + '">Reset PW</button>' +
           (isSelf ? '' : ' <button class="btn btn-xs danger" data-del="' + esc(u.email) + '">Delete</button>') + '</td></tr>';
       }).join('');
       panel.innerHTML = '<div class="hub-head"><div></div><button class="btn btn-primary btn-sm" id="addUser">+ New User</button></div>' +
@@ -64,6 +65,22 @@
           m.q('#dOk').addEventListener('click', function () {
             Hub.busy(m.q('#dOk'), Nav.api('/api/admin/users/' + encodeURIComponent(email), { method: 'DELETE' }))
               .then(function () { m.close(); Hub.toast('User deleted'); loadUsers(); })
+              .catch(function (e) { Hub.toast(e.message); });
+          });
+        });
+      });
+      Array.prototype.forEach.call(panel.querySelectorAll('[data-reset]'), function (b) {
+        b.addEventListener('click', function () {
+          var email = b.getAttribute('data-reset');
+          var m = Hub.modal('Send password reset',
+            '<p>Email a password-reset link to <b>' + esc(email) + '</b>? ' +
+            'The link lets them choose a new password and expires in 60 minutes.</p>' +
+            '<div class="modal-actions"><button class="btn btn-ghost" id="rCancel">Cancel</button>' +
+            '<button class="btn btn-primary" id="rOk">Send reset link</button></div>');
+          m.q('#rCancel').addEventListener('click', m.close);
+          m.q('#rOk').addEventListener('click', function () {
+            Hub.busy(m.q('#rOk'), Nav.api('/api/admin/users/' + encodeURIComponent(email) + '/reset', { method: 'POST' }))
+              .then(function () { m.close(); Hub.toast('Reset link sent'); })
               .catch(function (e) { Hub.toast(e.message); });
           });
         });

@@ -5,6 +5,20 @@
   Nav.renderNav('portal.html');
   var esc = Nav.esc;
 
+  // Build the 6-step client progress tracker. `steps` is the label array, `current`
+  // is the 1-based active step. Steps before current are 'done', the rest 'todo'.
+  function stepperHtml(steps, current) {
+    if (!steps || !steps.length) return '';
+    var cur = current || 1;
+    var dots = steps.map(function (label, i) {
+      var n = i + 1;
+      var cls = n < cur ? 'done' : (n === cur ? 'active' : 'todo');
+      return '<li class="step step-' + cls + '"><span class="step-dot">' +
+        (n < cur ? '✓' : n) + '</span><span class="step-label">' + esc(label) + '</span></li>';
+    }).join('');
+    return '<ol class="stepper">' + dots + '</ol>';
+  }
+
   Hub.guide('portal', auth.role, {
     client: { em: '👤', title: 'Welcome to your portal', text: 'Each card below is one of your jobs and its current status. When we ask for a document, open the job and upload it. When a job is ready, a <b>Review &amp; Sign</b> banner will appear for you to approve.' },
   });
@@ -33,6 +47,7 @@
         '<div><h3>' + esc(j.jobType || 'Tax Job') + ' <span class="muted small">' + esc(j.id) + '</span></h3>' +
         '<p class="muted small">' + esc(j.entityName || '') + (j.financialYear ? ' · ' + esc(j.financialYear) : '') + '</p></div>' +
         '<span class="' + pill + '">' + esc(j.clientStatus) + '</span></div>' +
+        stepperHtml(j.clientSteps, j.clientStep) +
         '<div class="progress"><i style="width:' + j.progressPct + '%"></i></div>' +
         '<p class="small">' + esc(j.clientMessage) + '</p>' +
         (action ? '<p class="small" style="color:var(--red);font-weight:600">' +

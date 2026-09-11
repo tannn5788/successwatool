@@ -32,17 +32,31 @@
       return '<option value="' + s[0] + '"' + (s[0] === j.stage ? ' selected' : '') + '>' + s[1] + '</option>';
     }).join('');
 
+    var docStatusPill = function (s) {
+      var map = { received: 'pill-inprogress', verified: 'pill-completed', incorrect: 'pill-action', info_required: 'pill-action' };
+      var label = { received: 'received', verified: 'verified', incorrect: 'incorrect', info_required: 'info required' };
+      return '<span class="pill ' + (map[s] || 'pill-inprogress') + '">' + (label[s] || s || 'received') + '</span>';
+    };
+    var docStatusOpts = function (cur) {
+      return ['received', 'verified', 'incorrect', 'info_required'].map(function (s) {
+        var label = s === 'info_required' ? 'Info required' : (s.charAt(0).toUpperCase() + s.slice(1));
+        return '<option value="' + s + '"' + ((cur || 'received') === s ? ' selected' : '') + '>' + label + '</option>';
+      }).join('');
+    };
     var docsHtml = (res.documents || []).length ? res.documents.map(function (d) {
       var canPreview = /\.(pdf|jpe?g|png|gif|webp|heic|heif|txt)$/i.test(d.filename || '') ||
         /^(image\/|application\/pdf|text\/)/.test(d.mime || '');
       return '<tr><td><span class="pill pill-inprogress">' + esc(d.category) + '</span></td>' +
         '<td>' + esc(d.filename) + '</td><td class="muted small">' + esc(d.uploaded_by || '') + '</td>' +
         '<td class="muted small">' + Hub.fmtDate(d.created_at) + '</td>' +
+        '<td>' + docStatusPill(d.status) +
+          (d.review_note ? '<div class="muted small" style="margin-top:2px">' + esc(d.review_note) + '</div>' : '') +
+          '<div style="margin-top:4px"><select class="doc-status" data-doc="' + d.id + '" data-tip="Verify this document. Marking it Incorrect or Info required notifies the client.">' + docStatusOpts(d.status) + '</select></div></td>' +
         '<td>' +
         (canPreview ? '<button class="btn btn-xs" data-preview="' + d.id + '" data-tip="Open this document in a new tab.">Preview</button> ' : '') +
         '<a class="btn btn-xs" href="/api/documents/' + d.id + '/download" data-dl="' + d.id + '" data-tip="Download this document to your computer.">Download</a> ' +
         '<button class="btn btn-xs danger" data-deldoc="' + d.id + '" data-tip="Permanently remove this document from the job.">Delete</button></td></tr>';
-    }).join('') : '<tr><td colspan="5" class="muted small">No documents uploaded.</td></tr>';
+    }).join('') : '<tr><td colspan="6" class="muted small">No documents uploaded.</td></tr>';
 
     var reqHtml = (res.docRequests || []).length ? res.docRequests.map(function (r) {
       return '<tr><td>' + esc(r.description) + (r.category ? ' <span class="muted small">(' + esc(r.category) + ')</span>' : '') + '</td>' +
@@ -70,6 +84,17 @@
     var isSup = auth.role === 'supervisor' || auth.role === 'administrator';
     var canAssign = auth.role === 'reception' || auth.role === 'supervisor' || auth.role === 'administrator';
 
+    // Overdue / due-soon badge shown next to the due-date editor.
+    var dueBadge = '';
+    if (j.due_date) {
+      var today = new Date(); today.setHours(0, 0, 0, 0);
+      var due = new Date((j.due_date || '').slice(0, 10) + 'T00:00:00');
+      var days = Math.round((due - today) / 86400000);
+      var done = j.stage === '09_completed';
+      if (!done && days < 0) dueBadge = '<span class="pill pill-action">Overdue</span>';
+      else if (!done && days <= 3) dueBadge = '<span class="pill pill-hold">Due soon</span>';
+    }
+
     document.getElementById('main').innerHTML =
       '<div class="hub-head"><div>' +
         '<a href="dashboard.html" class="muted small">← Dashboard</a>' +
@@ -83,6 +108,8 @@
         '<div class="stat" data-tip-below data-tip="The detailed internal workflow stage — staff only."><div class="n small">' + esc(j.stage_label) + '</div><div class="l">Internal stage</div></div>' +
         '<div class="stat" data-tip-below data-tip="The accountant preparing this job."><div class="n small">' + esc(j.accountant_name || j.accountant_email || '—') + '</div><div class="l">Accountant</div></div>' +
         '<div class="stat" data-tip-below data-tip="The supervisor who reviews this job before signing."><div class="n small">' + esc(j.supervisor_name || j.supervisor_email || '—') + '</div><div class="l">Supervisor</div></div>' +
+        '<div class="stat" data-tip-below data-tip="The internal deadline for this job. Overdue jobs are highlighted."><div class="n small"><input type="date" id="dueDateInput" value="' + esc((j.due_date || '').slice(0, 10)) + '" style="font-size:13px;padding:4px 6px" />' +
+          (dueBadge ? ' ' + dueBadge : '') + '</div><div class="l">Due date</div></div>' +
       '</div>' +
       '<div class="field" style="margin-top:14px;margin-bottom:0;max-width:360px" data-tip-below data-tip="Move the job to another stage. The change applies immediately and is recorded in the audit trail."><label>Change stage (applies immediately)</label><select id="stageSel">' + stageOpts + '</select></div>' +
       '<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
@@ -107,7 +134,7 @@
         '<div class="field-row" style="align-items:end"><div class="field" style="margin-bottom:0" data-tip="Pick the category that best describes the file (e.g. Income, PAYG, Bank Statements)."><label>Category</label><select id="upCat">' + catOpts + '</select></div>' +
         '<div class="field" style="margin-bottom:0" data-tip="Choose a file to attach: PDF, image, or Office document."><label>File</label><input type="file" id="upFile" accept=".pdf,.jpg,.jpeg,.png,.heic,.heif,.doc,.docx,.xls,.xlsx,.csv,.txt"/></div></div>' +
         '<button class="btn btn-primary btn-sm" id="upBtn" style="margin-top:10px" data-tip="Attach a file to this job (PDF, image or Office doc). Both staff and the client can see uploaded documents.">Upload document</button>' +
-        '<table class="hub-table" style="margin-top:14px"><thead><tr><th>Category</th><th>File</th><th>By</th><th>Date</th><th></th></tr></thead><tbody>' + docsHtml + '</tbody></table>' +
+        '<table class="hub-table" style="margin-top:14px"><thead><tr><th>Category</th><th>File</th><th>By</th><th>Date</th><th>Status</th><th></th></tr></thead><tbody>' + docsHtml + '</tbody></table>' +
       '</div>' +
 
       '<div class="section-title">Outstanding document requests</div>' +
@@ -185,6 +212,27 @@
       fd.append('file', f); fd.append('jobId', jobId); fd.append('category', $('upCat').value);
       Hub.busy($('upBtn'), Nav.api('/api/documents/upload', { method: 'POST', body: fd }))
         .then(function () { Hub.toast('Uploaded'); load(); }).catch(function (e) { Hub.toast(e.message); });
+    });
+    // Save the job due date whenever it changes.
+    if ($('dueDateInput')) $('dueDateInput').addEventListener('change', function () {
+      var val = $('dueDateInput').value || '';
+      Nav.api('/api/jobs/' + jobId + '/due-date', { method: 'PATCH', body: { dueDate: val } })
+        .then(function () { Hub.toast(val ? 'Due date set' : 'Due date cleared'); load(); })
+        .catch(function (e) { Hub.toast(e.message); });
+    });
+    // Verify a document. Incorrect / Info required prompts for an optional note.
+    Array.prototype.forEach.call(document.querySelectorAll('.doc-status'), function (sel) {
+      sel.addEventListener('change', function () {
+        var docId = sel.getAttribute('data-doc');
+        var status = sel.value;
+        var note = null;
+        if (status === 'incorrect' || status === 'info_required') {
+          note = prompt('Add a note for the client (optional):', '') || '';
+        }
+        Nav.api('/api/documents/' + docId + '/status', { method: 'PATCH', body: { status: status, note: note } })
+          .then(function () { Hub.toast('Document ' + status.replace('_', ' ')); load(); })
+          .catch(function (e) { Hub.toast(e.message); load(); });
+      });
     });
     $('rqBtn').addEventListener('click', function () {
       var d = $('rqDesc').value.trim();

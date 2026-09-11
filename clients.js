@@ -184,12 +184,14 @@
         '<div class="field"><label>Financial year</label><input id="jFy" placeholder="FY2024-25"/></div>' +
         '<div class="field"><label>Accountant</label><select id="jAcc">' + opts(['accountant']) + '</select></div>' +
         '<div class="field"><label>Supervisor</label><select id="jSup">' + opts(['supervisor']) + '</select></div>' +
+        '<div class="field"><label>Due date <span class="muted small">(optional)</span></label><input type="date" id="jDue"/></div>' +
         '<div class="modal-actions"><button class="btn btn-ghost" id="jCancel">Cancel</button><button class="btn btn-primary" id="jSave">Create Job</button></div>');
       m.q('#jCancel').addEventListener('click', m.close);
       m.q('#jSave').addEventListener('click', function () {
         Hub.busy(m.q('#jSave'), Nav.api('/api/jobs', { method: 'POST', body: {
           clientId: clientId, entityId: entityId, jobType: m.q('#jType').value.trim(),
-          financialYear: m.q('#jFy').value.trim(), accountant: m.q('#jAcc').value, supervisor: m.q('#jSup').value } }))
+          financialYear: m.q('#jFy').value.trim(), accountant: m.q('#jAcc').value, supervisor: m.q('#jSup').value,
+          dueDate: m.q('#jDue').value || null } }))
           .then(function (r) { m.close(); Hub.toast('Job ' + r.id + ' created'); location.href = 'job.html?id=' + encodeURIComponent(r.id); })
           .catch(function (e) { Hub.toast(e.message); });
       });

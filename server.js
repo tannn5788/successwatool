@@ -8,7 +8,10 @@ const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
 const compression = require('compression');
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+// Postgres DATE (OID 1082) is otherwise parsed into a JS Date at local midnight,
+// which shifts back a day when serialized to UTC JSON. Keep dates as 'YYYY-MM-DD'.
+types.setTypeParser(1082, (v) => v);
 const wf = require('./workflow');
 const { sendNotification } = require('./notify');
 const gdrive = require('./google-drive');
@@ -271,6 +274,86 @@ app.post('/api/login/verify', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+
+// ================= Forgot / Reset password (public) =================
+// Reset tokens are random, stored hashed, single-use, and expire in 60 minutes.
+const RESET_TTL_MS = 60 * 60 * 1000;
+function hashToken(t) { return crypto.createHash('sha256').update(String(t)).digest('hex'); }
+
+// Build an absolute base URL for links in emails. Prefer APP_URL; otherwise infer
+// from the request (works behind the VPS reverse proxy via x-forwarded-* headers).
+function baseUrl(req) {
+  if (process.env.APP_URL) return String(process.env.APP_URL).replace(/\/+$/, '');
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:' + (process.env.PORT || 8000)).split(',')[0].trim();
+  return proto + '://' + host;
+}
+
+// Create a reset token for an email and email the link. Shared by the public
+// forgot-password route and the admin-triggered reset.
+async function createAndSendReset(req, email, opts) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const id = crypto.randomBytes(12).toString('hex');
+  const expires = new Date(Date.now() + RESET_TTL_MS);
+  // Invalidate any earlier unused tokens for this email, then insert the new one.
+  await pool.query('UPDATE password_resets SET used=true WHERE email=$1 AND used=false', [email]);
+  await pool.query(
+    'INSERT INTO password_resets (id, email, token_hash, expires_at) VALUES ($1,$2,$3,$4)',
+    [id, email, hashToken(token), expires]);
+  const link = baseUrl(req) + '/reset?token=' + id + '.' + token;
+  const intro = (opts && opts.byAdmin)
+    ? 'An administrator has started a password reset for your Successwa account.'
+    : 'We received a request to reset the password for your Successwa account.';
+  notifyBg({
+    toEmail: email,
+    rawSubject: 'Reset your Successwa password',
+    rawBody: intro + '\n\nClick the link below to choose a new password. This link expires in 60 minutes and can be used once.\n\n'
+      + link + '\n\nIf you did not request this, you can safely ignore this email.',
+  });
+  return link;
+}
+
+// POST /api/forgot-password { email } — always returns ok (no account enumeration).
+app.post('/api/forgot-password', async (req, res) => {
+  const email = normAccount(req.body.email);
+  if (!email || email.indexOf('@') === -1) return res.status(400).json({ error: 'valid email required' });
+  try {
+    const r = await pool.query('SELECT email, active FROM users WHERE email=$1', [email]);
+    if (r.rows.length && r.rows[0].active) {
+      await createAndSendReset(req, email, { byAdmin: false });
+    }
+    // Same response whether or not the account exists.
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/reset-password { token, password } — consume token, set new password.
+app.post('/api/reset-password', async (req, res) => {
+  const raw = String(req.body.token || '');
+  const password = String(req.body.password || '');
+  if (!raw || raw.indexOf('.') === -1) return res.status(400).json({ error: 'invalid or expired reset link' });
+  if (password.length < 6) return res.status(400).json({ error: 'password must be at least 6 characters' });
+  const dot = raw.indexOf('.');
+  const id = raw.slice(0, dot);
+  const token = raw.slice(dot + 1);
+  try {
+    const r = await pool.query('SELECT * FROM password_resets WHERE id=$1', [id]);
+    if (!r.rows.length) return res.status(400).json({ error: 'invalid or expired reset link' });
+    const row = r.rows[0];
+    if (row.used) return res.status(400).json({ error: 'this reset link has already been used' });
+    if (new Date(row.expires_at) < new Date()) return res.status(400).json({ error: 'this reset link has expired' });
+    if (hashToken(token) !== row.token_hash) return res.status(400).json({ error: 'invalid or expired reset link' });
+
+    const { salt, hash } = await hashPassword(password);
+    await pool.query('UPDATE users SET pass_hash=$1, pass_salt=$2 WHERE email=$3', [hash, salt, row.email]);
+    await pool.query('UPDATE password_resets SET used=true WHERE id=$1', [id]);
+    // Kick any existing sessions so the old password can't keep a session alive.
+    await pool.query('DELETE FROM sessions WHERE email=$1', [row.email]);
+    sessionCache.clear();
+    await audit(pool, row.email, 'password.reset', 'user', row.email, {});
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // POST /api/logout
 app.post('/api/logout', requireAuth, async (req, res) => {
@@ -541,6 +624,7 @@ app.post('/api/jobs', requireAuth, requireRole.apply(null, STAFF), async (req, r
   const fy = String(req.body.financialYear || '').trim();
   const accountant = normAccount(req.body.accountant);
   const supervisor = normAccount(req.body.supervisor);
+  const dueDate = String(req.body.dueDate || '').trim() || null; // YYYY-MM-DD or null
   if (!clientId) return res.status(400).json({ error: 'clientId required' });
   const roleErr = await validateAssignment(accountant, supervisor);
   if (roleErr) return res.status(400).json({ error: roleErr });
@@ -551,9 +635,9 @@ app.post('/api/jobs', requireAuth, requireRole.apply(null, STAFF), async (req, r
     if (!ex.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'client not found' }); }
     const id = await nextId(client, 'job', 'JB-');
     await client.query(
-      `INSERT INTO jobs (id, client_id, entity_id, job_type, financial_year, accountant_email, supervisor_email, stage)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'01_created')`,
-      [id, clientId, entityId || null, jobType || null, fy || null, accountant || null, supervisor || null]);
+      `INSERT INTO jobs (id, client_id, entity_id, job_type, financial_year, accountant_email, supervisor_email, due_date, stage)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'01_created')`,
+      [id, clientId, entityId || null, jobType || null, fy || null, accountant || null, supervisor || null, dueDate]);
     await client.query('INSERT INTO job_status_history (job_id, from_stage, to_stage, changed_by, reason) VALUES ($1,$2,$3,$4,$5)',
       [id, null, '01_created', req.user.email, 'Job created']);
     await audit(client, req.user.email, 'job.create', 'job', id, { clientId, entityId, jobType, accountant, supervisor });
@@ -712,6 +796,72 @@ app.post('/api/jobs/:id/assign', requireAuth, requireRole('reception', 'supervis
         rawBody: 'You have been set as supervisor for job ' + job.id + ' — ' + label + '.\n\nReassigned by ' + req.user.email + '.' });
     }
     res.json({ ok: true });
+  } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
+  finally { client.release(); }
+});
+
+// PATCH /api/jobs/:id/due-date { dueDate } — set or clear a job's deadline (staff).
+app.patch('/api/jobs/:id/due-date', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  const raw = String(req.body.dueDate || '').trim();
+  // Empty clears the date; otherwise require YYYY-MM-DD.
+  const dueDate = raw || null;
+  if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return res.status(400).json({ error: 'due date must be YYYY-MM-DD' });
+  try {
+    const jr = await pool.query('SELECT id FROM jobs WHERE id=$1', [req.params.id]);
+    if (!jr.rows.length) return res.status(404).json({ error: 'job not found' });
+    await pool.query('UPDATE jobs SET due_date=$1, updated_at=now() WHERE id=$2', [dueDate, req.params.id]);
+    await audit(pool, req.user.email, 'job.due_date', 'job', req.params.id, { dueDate });
+    res.json({ ok: true, dueDate });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH /api/documents/:id/status { status, note } — staff verify an uploaded document.
+// status: 'received' | 'verified' | 'incorrect' | 'info_required'. The latter two
+// notify the client (with an optional note) and flag the job as action-required.
+app.patch('/api/documents/:id/status', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  const status = String(req.body.status || '').trim();
+  const note = String(req.body.note || '').trim() || null;
+  const allowed = ['received', 'verified', 'incorrect', 'info_required'];
+  if (allowed.indexOf(status) === -1) return res.status(400).json({ error: 'invalid status' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const dr = await client.query(
+      `SELECT d.*, j.id AS job_id, c.email AS client_email, c.name AS client_name
+         FROM documents d JOIN jobs j ON j.id=d.job_id JOIN clients c ON c.id=j.client_id
+        WHERE d.id=$1 FOR UPDATE`, [req.params.id]);
+    if (!dr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'document not found' }); }
+    const doc = dr.rows[0];
+    // Accountants may only verify docs on their own jobs.
+    if (req.user.role === 'accountant') {
+      const own = await client.query('SELECT 1 FROM jobs WHERE id=$1 AND lower(accountant_email)=lower($2)', [doc.job_id, req.user.email]);
+      if (!own.rows.length) { await client.query('ROLLBACK'); return res.status(403).json({ error: 'You can only review documents on your own jobs' }); }
+    }
+    const verified = status === 'verified' || status === 'incorrect' || status === 'info_required';
+    await client.query(
+      'UPDATE documents SET status=$1, review_note=$2, verified_by=$3, verified_at=$4 WHERE id=$5',
+      [status, note, verified ? req.user.email : null, verified ? new Date() : null, doc.id]);
+    // If the doc needs client action, flag the job so the portal shows "Action Required".
+    if (status === 'incorrect' || status === 'info_required') {
+      await client.query('UPDATE jobs SET action_required=true, updated_at=now() WHERE id=$1', [doc.job_id]);
+    }
+    await audit(client, req.user.email, 'document.status', 'job', doc.job_id, { documentId: doc.id, status, note });
+    await client.query('COMMIT');
+
+    // Tell the client when we need something from them (background).
+    if ((status === 'incorrect' || status === 'info_required') && doc.client_email) {
+      const what = status === 'incorrect'
+        ? 'There is an issue with a document you uploaded'
+        : 'We need a bit more information about a document you uploaded';
+      notifyBg({
+        jobId: doc.job_id, toEmail: doc.client_email,
+        rawSubject: 'Action needed on your document — ' + doc.job_id,
+        rawBody: what + ' ("' + doc.filename + '") for job ' + doc.job_id + '.'
+          + (note ? '\n\nNote from our team: ' + note : '')
+          + '\n\nPlease log in to your portal to review and re-upload if needed.',
+      });
+    }
+    res.json({ ok: true, status });
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
   finally { client.release(); }
 });
@@ -930,6 +1080,16 @@ app.post('/api/documents/upload', requireAuth, upload.single('file'), async (req
         rawBody: 'The client uploaded "' + req.file.originalname + '" (' + category + ') to job ' + job.id + '.\n\nLog in to review it.',
       });
     }
+
+    // Acknowledge back to the CLIENT so they know we received it (background).
+    if (req.user.role === 'client' && job.client_email) {
+      notifyBg({
+        jobId: job.id, toEmail: job.client_email,
+        rawSubject: 'Document received — ' + job.id,
+        rawBody: 'Thank you. Your document "' + req.file.originalname + '" has been received for job ' + job.id + '.'
+          + '\n\nOur team will review it shortly. You can track progress any time by logging in to your portal.',
+      });
+    }
     res.json({ ok: true });
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
   finally { client.release(); }
@@ -1146,6 +1306,18 @@ app.delete('/api/admin/users/:email', requireAuth, requireRole('administrator'),
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/admin/users/:email/reset — admin sends the user a password-reset link.
+app.post('/api/admin/users/:email/reset', requireAuth, requireRole('administrator'), async (req, res) => {
+  const email = normAccount(req.params.email);
+  try {
+    const ex = await pool.query('SELECT email FROM users WHERE email=$1', [email]);
+    if (!ex.rows.length) return res.status(404).json({ error: 'user not found' });
+    await createAndSendReset(req, email, { byAdmin: true });
+    await audit(pool, req.user.email, 'password.reset_sent', 'user', email, {});
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/admin/templates', requireAuth, requireRole('administrator'), async (req, res) => {
   try { const r = await pool.query('SELECT * FROM notification_templates ORDER BY key'); res.json({ ok: true, templates: r.rows }); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -1203,6 +1375,7 @@ app.get('/api/portal/jobs', requireAuth, requireRole('client'), async (req, res)
       jobs.push({
         id: j.id, jobType: j.job_type, financialYear: j.financial_year, entityName: j.entity_name,
         clientStatus: view.clientStatus, clientMessage: view.clientMessage, progressPct: view.progressPct,
+        clientStep: view.clientStep, clientStepLabel: view.clientStepLabel, clientSteps: view.clientSteps,
         lastUpdate: j.updated_at, outstanding: rem.rows[0].n,
         nextAction: portalNextAction(j, view, rem.rows[0].n),
       });
@@ -1225,6 +1398,7 @@ app.get('/api/portal/jobs/:id', requireAuth, requireRole('client'), async (req, 
     res.json({ ok: true, job: {
       id: j.id, jobType: j.job_type, financialYear: j.financial_year,
       clientStatus: view.clientStatus, clientMessage: view.clientMessage, progressPct: view.progressPct, lastUpdate: j.updated_at,
+      clientStep: view.clientStep, clientStepLabel: view.clientStepLabel, clientSteps: view.clientSteps,
       canSign: j.stage === '06_awaiting_signature' && !j.on_hold,
     }, docRequests: reqs.rows, documents: docs.rows });
   } catch (e) { res.status(500).json({ error: e.message }); }

@@ -14,18 +14,30 @@ const STAGES = [
   '09_completed',
 ];
 
+// The 6 simplified steps a CLIENT sees (the stepper on their portal). Internal
+// stages map onto these; several internal stages can share one client step.
+const CLIENT_STEPS = [
+  'Documents Requested', // 1
+  'Documents Received',  // 2
+  'Work in Progress',    // 3
+  'Under Review',        // 4
+  'Ready for Client',    // 5
+  'Completed',           // 6
+];
+
 // Internal -> Client-facing mapping. `notify` = template key to fire on entering the stage.
 // `internalLabel` is staff-only; `clientStatus` + `clientMessage` are the only things a client sees.
+// `clientStep` (1..6) positions the job on the client's simplified progress stepper.
 const STAGE_MAP = {
-  '01_created':            { internalLabel: '01 Job Created',            clientStatus: 'Received',            clientMessage: 'We have created your job and will be in touch shortly.',                       notify: null },
-  '02_waiting_docs':       { internalLabel: '02 Waiting for Documents',  clientStatus: 'Action Required',     clientMessage: 'We need some documents from you to get started.',                             notify: 'action_required' },
-  '03_docs_received':      { internalLabel: '03 Documents Received',     clientStatus: 'In Progress',         clientMessage: 'Thanks — we have received your documents and started work.',                   notify: 'documents_received' },
-  '04_processing':         { internalLabel: '04 Accountant Processing',  clientStatus: 'In Progress',         clientMessage: 'Your accountant is currently preparing your work.',                           notify: null },
-  '05_supervisor_review':  { internalLabel: '05 Supervisor Review',      clientStatus: 'In Progress',         clientMessage: 'Your work is being reviewed by a senior team member.',                        notify: 'supervisor_review' },
-  '06_awaiting_signature': { internalLabel: '06 Awaiting Client Signature', clientStatus: 'Action Required', clientMessage: 'Your documents are ready — please review and sign.',                          notify: 'awaiting_signature' },
-  '07_ready_lodgement':    { internalLabel: '07 Ready for Lodgement',    clientStatus: 'In Progress',         clientMessage: 'Everything is signed and ready to lodge.',                                    notify: null },
-  '08_lodged':             { internalLabel: '08 Lodged',                 clientStatus: 'Lodged',              clientMessage: 'Your return has been lodged with the ATO.',                                   notify: 'lodged' },
-  '09_completed':          { internalLabel: '09 Completed',              clientStatus: 'Completed',           clientMessage: 'This job is now complete. Thank you for choosing us.',                        notify: 'completed' },
+  '01_created':            { internalLabel: '01 Job Created',            clientStep: 1, clientStatus: 'Received',            clientMessage: 'We have created your job and will be in touch shortly.',                       notify: null },
+  '02_waiting_docs':       { internalLabel: '02 Waiting for Documents',  clientStep: 1, clientStatus: 'Action Required',     clientMessage: 'We need some documents from you to get started.',                             notify: 'action_required' },
+  '03_docs_received':      { internalLabel: '03 Documents Received',     clientStep: 2, clientStatus: 'In Progress',         clientMessage: 'Thanks — we have received your documents and started work.',                   notify: 'documents_received' },
+  '04_processing':         { internalLabel: '04 Accountant Processing',  clientStep: 3, clientStatus: 'In Progress',         clientMessage: 'Your accountant is currently preparing your work.',                           notify: null },
+  '05_supervisor_review':  { internalLabel: '05 Supervisor Review',      clientStep: 4, clientStatus: 'In Progress',         clientMessage: 'Your work is being reviewed by a senior team member.',                        notify: 'supervisor_review' },
+  '06_awaiting_signature': { internalLabel: '06 Awaiting Client Signature', clientStep: 5, clientStatus: 'Action Required', clientMessage: 'Your documents are ready — please review and sign.',                          notify: 'awaiting_signature' },
+  '07_ready_lodgement':    { internalLabel: '07 Ready for Lodgement',    clientStep: 5, clientStatus: 'In Progress',         clientMessage: 'Everything is signed and ready to lodge.',                                    notify: null },
+  '08_lodged':             { internalLabel: '08 Lodged',                 clientStep: 6, clientStatus: 'Lodged',              clientMessage: 'Your return has been lodged with the ATO.',                                   notify: 'lodged' },
+  '09_completed':          { internalLabel: '09 Completed',              clientStep: 6, clientStatus: 'Completed',           clientMessage: 'This job is now complete. Thank you for choosing us.',                        notify: 'completed' },
 };
 
 // Human-friendly next action shown to staff on the dashboard.
@@ -56,12 +68,17 @@ function clientView(job) {
   const m = STAGE_MAP[job.stage] || {};
   let clientStatus = m.clientStatus || 'In Progress';
   let clientMessage = m.clientMessage || '';
+  const step = m.clientStep || 1; // 1..6 on the client stepper
   if (job.on_hold) { clientStatus = 'On Hold'; clientMessage = 'This job is temporarily on hold. We will update you soon.'; }
   else if (job.action_required && clientStatus !== 'Action Required') { clientStatus = 'Action Required'; }
   return {
     clientStatus: clientStatus,
     clientMessage: clientMessage,
-    progressPct: Math.round(((stageIndex(job.stage) + 1) / STAGES.length) * 100),
+    clientStep: step,                          // which of the 6 steps is current
+    clientStepLabel: CLIENT_STEPS[step - 1],   // e.g. 'Work in Progress'
+    clientSteps: CLIENT_STEPS,                 // the 6 labels, for the stepper UI
+    // Progress reflects the client's 6-step journey, not the 9 internal stages.
+    progressPct: Math.round((step / CLIENT_STEPS.length) * 100),
   };
 }
 
@@ -71,6 +88,6 @@ function notifyKeyForStage(stage) {
 }
 
 module.exports = {
-  STAGES, STAGE_MAP, NEXT_ACTION,
+  STAGES, STAGE_MAP, NEXT_ACTION, CLIENT_STEPS,
   isValidStage, stageIndex, canTransition, clientView, notifyKeyForStage,
 };

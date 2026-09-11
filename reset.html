@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en" data-app="personal" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Reset password - Successwa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Archivo:wght@500;600;700;800&family=Karla:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=64" />
+<link rel="icon" href="logo.png?v=9">
+<style>
+  html,body{overflow-x:clip}
+  body{min-height:100vh;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px}
+  .auth-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);
+    border-radius:16px;padding:clamp(28px,5vw,44px);animation:modalIn .3s ease}
+  .auth-brand__mark{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+  .auth-brand__mark img{height:30px;display:block}
+  .auth-brand__mark span{font-family:var(--mono);font-size:11px;letter-spacing:2.5px;
+    text-transform:uppercase;color:var(--muted)}
+  .auth-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:2px;
+    text-transform:uppercase;color:var(--green-text)}
+  .auth-card h1{font-family:var(--serif);font-size:26px;font-weight:700;letter-spacing:-.01em;margin-top:10px}
+  .auth-card .sub{color:var(--muted);font-size:13.5px;margin-top:6px;margin-bottom:24px}
+  .auth-field{margin-bottom:15px}
+  .auth-field label{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:1px;
+    text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+  .auth-field input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);
+    background:var(--surface-2);color:var(--text);font-size:14px;font-family:var(--sans);
+    transition:border-color .15s,box-shadow .15s}
+  .auth-field input:focus{outline:none;border-color:var(--green-text);box-shadow:0 0 0 3px var(--green-soft)}
+  .auth-msg{min-height:18px;font-size:13px;margin:4px 0 14px}
+  .auth-msg.err{color:var(--red)}
+  .auth-msg.ok{color:var(--ok)}
+  .btn-block{width:100%;justify-content:center;padding:13px}
+  .auth-toggle{font-size:13.5px;color:var(--muted);margin-top:18px;text-align:center}
+  .auth-toggle a{color:var(--green-text);font-weight:600;cursor:pointer}
+  @media (prefers-reduced-motion:reduce){.auth-card{animation:none}}
+</style>
+</head>
+<body>
+  <div class="auth-card">
+    <div class="auth-brand__mark">
+      <img src="logo.png?v=9" alt="Successwa" />
+      <span>Client Hub</span>
+    </div>
+    <p class="auth-eyebrow">Reset password</p>
+    <h1 id="rTitle">Choose a new password</h1>
+    <p class="sub" id="rSub">Enter a new password for your account.</p>
+
+    <form id="resetForm" autocomplete="on">
+      <div class="auth-field">
+        <label for="rPass">New password</label>
+        <input type="password" id="rPass" placeholder="At least 6 characters" autocomplete="new-password" required />
+      </div>
+      <div class="auth-field">
+        <label for="rPass2">Confirm new password</label>
+        <input type="password" id="rPass2" placeholder="Re-enter new password" autocomplete="new-password" required />
+      </div>
+      <div class="auth-msg" id="rMsg"></div>
+      <button type="submit" class="btn btn-primary btn-block" id="rBtn">Update password</button>
+    </form>
+    <p class="auth-toggle"><a href="login.html">Back to sign in</a></p>
+  </div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  function msg(text, cls) { var m = $('rMsg'); m.textContent = text; m.className = 'auth-msg ' + (cls || ''); }
+
+  // Pull the token from the query string (?token=id.secret).
+  var params = new URLSearchParams(location.search);
+  var token = params.get('token') || '';
+  if (!token) {
+    $('rTitle').textContent = 'Invalid reset link';
+    $('rSub').textContent = 'This link is missing its reset token. Please request a new one.';
+    $('resetForm').style.display = 'none';
+  }
+
+  $('resetForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var p1 = $('rPass').value, p2 = $('rPass2').value;
+    if (p1.length < 6) { msg('Password must be at least 6 characters.', 'err'); return; }
+    if (p1 !== p2) { msg('Passwords do not match.', 'err'); return; }
+    var btn = $('rBtn'); btn.disabled = true; msg('Updating...', '');
+    fetch('/api/reset-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token, password: p1 })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.j.error || 'Something went wrong');
+        msg('Password updated. Redirecting to sign in...', 'ok');
+        setTimeout(function () { location.href = 'login.html'; }, 1200);
+      }).catch(function (err) { msg(err.message, 'err'); btn.disabled = false; });
+  });
+})();
+</script>
+</body>
+</html>

@@ -718,6 +718,26 @@ tr.row-selected td{background:var(--green-soft)}
 .progress > i{display:block;height:100%;background:var(--green-text);
   border-radius:3px;transition:width .4s cubic-bezier(.2,.7,.3,1)}
 
+/* 6-step client progress tracker (portal job cards) */
+.stepper{list-style:none;display:flex;gap:0;margin:14px 0 4px;padding:0;overflow-x:auto}
+.stepper .step{flex:1 1 0;min-width:76px;position:relative;text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:6px}
+/* connector line between dots */
+.stepper .step::before{content:"";position:absolute;top:11px;left:-50%;width:100%;height:2px;
+  background:var(--border);z-index:0}
+.stepper .step:first-child::before{display:none}
+.stepper .step-done::before,.stepper .step-active::before{background:var(--green-text)}
+.stepper .step-dot{position:relative;z-index:1;width:24px;height:24px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;
+  font-family:var(--mono);background:var(--surface-2);color:var(--muted);
+  border:2px solid var(--border);transition:all .25s}
+.stepper .step-label{font-size:10.5px;line-height:1.25;color:var(--muted);max-width:88px}
+.stepper .step-done .step-dot{background:var(--green-text);color:#fff;border-color:var(--green-text)}
+.stepper .step-active .step-dot{background:var(--surface);color:var(--green-text);
+  border-color:var(--green-text);box-shadow:0 0 0 3px var(--green-soft)}
+.stepper .step-active .step-label{color:var(--text);font-weight:700}
+.stepper .step-done .step-label{color:var(--text)}
+
 .field{margin-bottom:13px}
 .field label{display:block;font-family:var(--mono);font-size:10px;letter-spacing:1px;text-transform:uppercase;
   color:var(--muted);margin-bottom:5px}
