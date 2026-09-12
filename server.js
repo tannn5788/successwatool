@@ -15,6 +15,7 @@ types.setTypeParser(1082, (v) => v);
 const wf = require('./workflow');
 const { sendNotification } = require('./notify');
 const gdrive = require('./google-drive');
+const gauth = require('./google-auth');
 const mfa = require('./mfa');
 
 // Fire-and-forget notification: never blocks the HTTP response. The row is still
@@ -272,6 +273,90 @@ app.post('/api/login/verify', async (req, res) => {
     const token = await createSession(u.email, u.role);
     res.json({ ok: true, email: u.email, name: u.name, role: u.role, token });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ================= "Continue with Google" sign-in =================
+// Login-only OAuth (identity scopes only), separate from the Drive integration.
+// State is HMAC-signed + time-limited so it is unforgeable and cluster-safe
+// (no shared memory needed across PM2 workers).
+function googleStateSecret() {
+  return process.env.GOOGLE_CLIENT_SECRET || process.env.APP_URL || 'successwa-login-state';
+}
+function makeGoogleState() {
+  const payload = crypto.randomBytes(12).toString('hex') + '.' + Date.now();
+  const sig = crypto.createHmac('sha256', googleStateSecret()).update(payload).digest('hex');
+  return payload + '.' + sig;
+}
+function verifyGoogleState(state) {
+  const parts = String(state || '').split('.');
+  if (parts.length !== 3) return false;
+  const payload = parts[0] + '.' + parts[1];
+  const expected = crypto.createHmac('sha256', googleStateSecret()).update(payload).digest('hex');
+  let ok = false;
+  try { ok = crypto.timingSafeEqual(Buffer.from(parts[2]), Buffer.from(expected)); } catch (e) { return false; }
+  if (!ok) return false;
+  const ts = Number(parts[1]);
+  if (!ts || Date.now() - ts > 10 * 60 * 1000) return false; // 10-minute window
+  return true;
+}
+
+// GET /api/auth/google/start — redirect the browser to Google's consent screen.
+app.get('/api/auth/google/start', (req, res) => {
+  if (!gauth.isConfigured()) {
+    return res.redirect('/login.html#error=' + encodeURIComponent('Google sign-in is not configured on the server.'));
+  }
+  try {
+    const url = gauth.getLoginAuthUrl(baseUrl(req), makeGoogleState());
+    res.redirect(url);
+  } catch (e) {
+    console.error('[google login start]', e && e.message);
+    res.redirect('/login.html#error=' + encodeURIComponent('Could not start Google sign-in.'));
+  }
+});
+
+// GET /api/auth/google/callback — Google redirects here with ?code&state.
+app.get('/api/auth/google/callback', async (req, res) => {
+  const fail = (msg) => res.redirect('/login.html#error=' + encodeURIComponent(msg));
+  try {
+    const { code, state, error } = req.query;
+    if (error) return fail('Google sign-in was cancelled.');
+    if (!code || !verifyGoogleState(state)) return fail('Google sign-in expired or was invalid. Please try again.');
+
+    const profile = await gauth.exchangeCodeForProfile(baseUrl(req), String(code));
+    if (!profile.email || !profile.emailVerified) {
+      return fail('Your Google account email is not verified.');
+    }
+    const email = normAccount(profile.email);
+
+    let ur = await pool.query('SELECT email, name, role, active FROM users WHERE email=$1', [email]);
+    let u = ur.rows[0];
+
+    if (!u) {
+      // Option 1B: any Google account may sign in; new emails become client accounts.
+      const rnd = crypto.randomBytes(24).toString('hex'); // unusable random password
+      const { salt, hash } = await hashPassword(rnd);
+      await pool.query(
+        "INSERT INTO users (email, name, pass_hash, pass_salt, role) VALUES ($1,$2,$3,$4,'client')",
+        [email, profile.name || null, hash, salt]);
+      await audit(pool, email, 'user.google_signup', 'user', email, {});
+      u = { email, name: profile.name || null, role: 'client', active: true };
+    }
+
+    if (!u.active) return fail('This account has been disabled. Please contact your accountant.');
+
+    // Google verified the user — issue the session directly (bypasses app MFA).
+    const token = await createSession(u.email, u.role);
+    await audit(pool, u.email, 'login.google', 'user', u.email, {});
+    const frag = '#token=' + encodeURIComponent(token) +
+      '&email=' + encodeURIComponent(u.email) +
+      '&role=' + encodeURIComponent(u.role) +
+      '&name=' + encodeURIComponent(u.name || '');
+    res.redirect('/login.html' + frag);
+  } catch (e) {
+    console.error('[google login callback]', e && e.message);
+    fail('Google sign-in failed. Please try again.');
+  }
 });
 
 
