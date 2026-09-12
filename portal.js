@@ -114,10 +114,15 @@
             '<div><strong>Your return is ready to sign</strong><div class="muted small">Please review and confirm so we can proceed with lodgement.</div></div>' +
             '<button class="btn btn-primary" data-sign="' + id + '">Review &amp; Sign</button>' +
           '</div>' : '') +
-        '<div class="section-title">Outstanding items</div>' +
-        (pending.length ? '<ul class="timeline">' + pending.map(function (r) {
-          return '<li>' + esc(r.description) + (r.due_date ? ' <span class="muted small">(due ' + Hub.fmtDate(r.due_date) + ')</span>' : '') + '</li>';
-        }).join('') + '</ul>' : '<p class="muted small">Nothing outstanding right now.</p>') +
+        (pending.length ?
+          '<div class="outstanding-card">' +
+            '<div class="oc-head"><span class="oc-badge">' + pending.length + '</span> Action needed — please provide the following</div>' +
+            '<ul class="outstanding-list">' + pending.map(function (r) {
+              return '<li><span class="oi-dot"></span><span><span class="oi-title">' + esc(r.description) + '</span>' +
+                (r.due_date ? '<br><span class="oi-due">Due ' + Hub.fmtDate(r.due_date) + '</span>' : '') + '</span></li>';
+            }).join('') + '</ul>' +
+          '</div>' :
+          '<div class="section-title">Outstanding items</div><p class="outstanding-empty">✓ Nothing outstanding right now.</p>') +
         '<div class="section-title">Your uploaded documents</div>' +
         (docs.length ? '<table class="hub-table"><thead><tr><th>File</th><th>Category</th><th>Uploaded</th><th>Status</th><th></th></tr></thead><tbody>' + docs.map(function (d) {
           var mine = d.uploaded_by && auth.email && d.uploaded_by.toLowerCase() === auth.email.toLowerCase();

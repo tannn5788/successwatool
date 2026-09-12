@@ -780,6 +780,18 @@ tr.row-selected td{background:var(--green-soft)}
 .sign-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;margin-bottom:14px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;}
 .sign-banner .btn{white-space:nowrap;}
 
+/* Prominent "we need something from you" card in the client portal */
+.outstanding-card{background:#fdecea;border:1px solid var(--red);border-left:5px solid var(--red);border-radius:12px;padding:14px 16px;margin:10px 0 4px;}
+.outstanding-card .oc-head{display:flex;align-items:center;gap:8px;font-weight:800;color:var(--red);font-size:14px;letter-spacing:.02em;margin-bottom:10px;}
+.outstanding-card .oc-head .oc-badge{background:var(--red);color:#fff;border-radius:20px;padding:2px 9px;font-size:12px;font-weight:800;}
+.outstanding-list{list-style:none;margin:0;padding:0;}
+.outstanding-list li{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:#fff;border:1px solid #f2c5bf;border-radius:9px;margin-bottom:8px;}
+.outstanding-list li:last-child{margin-bottom:0;}
+.outstanding-list .oi-dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--red);margin-top:6px;}
+.outstanding-list .oi-title{font-weight:700;color:#1c1c1c;}
+.outstanding-list .oi-due{display:inline-block;margin-top:2px;font-size:12px;font-weight:700;color:var(--red);}
+.outstanding-empty{display:flex;align-items:center;gap:8px;color:var(--ok,#2e7d32);font-weight:600;padding:8px 0;}
+
 #loadOverlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.28);opacity:0;visibility:hidden;transition:opacity .18s ease;}
 #loadOverlay.active{opacity:1;visibility:visible;}
 #loadOverlay .load-spinner{width:auto;height:auto;border-radius:0;background:none;box-shadow:none;display:flex;align-items:center;justify-content:center;}

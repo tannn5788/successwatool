@@ -31,6 +31,7 @@
           (j.pending_reqs > 0 ? ' · <span style="color:var(--red)">' + j.pending_reqs + ' outstanding</span>' : '') + '</p></div>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" data-detail="' + esc(j.id) + '">Review details</button>' +
         '<button class="btn btn-primary btn-sm" data-approve="' + esc(j.id) + '">Approve</button>' +
+        '<button class="btn btn-outline btn-sm" data-reqinfo="' + esc(j.id) + '">Request info from client</button>' +
         '<button class="btn btn-ghost btn-sm" data-return="' + esc(j.id) + '">Return</button></div></div>' +
         '<div class="review-detail" data-panel="' + esc(j.id) + '"></div></div>';
     }).join('');
@@ -48,6 +49,30 @@
       b.addEventListener('click', function () {
         returnModal(b.getAttribute('data-return'));
       });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-reqinfo]'), function (b) {
+      b.addEventListener('click', function () {
+        requestInfoModal(b.getAttribute('data-reqinfo'));
+      });
+    });
+  }
+
+  function requestInfoModal(jobId) {
+    var m = Hub.modal('Request more info from client',
+      '<p class="muted small">Ask the client for extra information or documents. This keeps the job in review, flags it as <b>Action required</b> for the client, and emails them your message.</p>' +
+      '<div class="field"><label>What do you need from the client?</label>' +
+      '<textarea id="riMsg" rows="4" placeholder="e.g. Please confirm the purchase date of your rental property and upload the settlement statement."></textarea></div>' +
+      '<div class="field"><label>Due date (optional)</label><input type="date" id="riDue"/></div>' +
+      '<div class="modal-actions"><button class="btn btn-ghost" id="riCancel">Cancel</button><button class="btn btn-primary" id="riDo">Send request</button></div>');
+    m.q('#riMsg').focus();
+    m.q('#riCancel').addEventListener('click', m.close);
+    m.q('#riDo').addEventListener('click', function () {
+      var msg = m.q('#riMsg').value.trim();
+      if (!msg) { Hub.toast('Please enter a message'); return; }
+      var due = m.q('#riDue').value || null;
+      Hub.busy(m.q('#riDo'), Nav.api('/api/review/' + jobId + '/request-info', { method: 'POST', body: { message: msg, dueDate: due } }))
+        .then(function () { m.close(); Hub.toast('Request sent to client'); load(); })
+        .catch(function (e) { Hub.toast(e.message); });
     });
   }
 

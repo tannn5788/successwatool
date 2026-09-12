@@ -127,7 +127,7 @@
         '<button class="btn btn-outline btn-sm" id="holdBtn" data-tip="Pause or resume this job. On-hold jobs are highlighted and excluded from normal progress.">' + (j.on_hold ? 'Remove ON HOLD' : 'Put ON HOLD') + '</button>' +
         (canAssign ? '<button class="btn btn-outline btn-sm" id="assignBtn" data-tip="Change the accountant or supervisor assigned to this job. Newly assigned staff get a notification.">Reassign staff</button>' : '') +
         (j.action_required && !j.on_hold ? '<span class="flag flag-action">ACTION REQUIRED</span><span class="muted small">Client has outstanding document requests</span>' : '') +
-        (isSup && j.stage === '05_supervisor_review' ? '<button class="btn btn-primary btn-sm" id="approveBtn" data-tip="Approve the work and move the job to the client signature stage.">Approve → Signature</button><button class="btn btn-ghost btn-sm" id="returnBtn" data-tip="Send the job back to the accountant with a required reason.">Return to accountant</button>' : '') +
+        (isSup && j.stage === '05_supervisor_review' ? '<button class="btn btn-primary btn-sm" id="approveBtn" data-tip="Approve the work and move the job to the client signature stage.">Approve → Signature</button><button class="btn btn-outline btn-sm" id="reqInfoBtn" data-tip="Ask the client for more information. Keeps the job in review and flags it as Action required for the client.">Request info from client</button><button class="btn btn-ghost btn-sm" id="returnBtn" data-tip="Send the job back to the accountant with a required reason.">Return to accountant</button>' : '') +
         (auth.role === 'administrator' ? '<button class="btn btn-sm danger" id="delJobBtn" style="margin-left:auto" data-tip="Permanently delete this job and all its documents, requests and history. This cannot be undone.">Delete job</button>' : '') +
       '</div>' +
       '<p class="muted small" style="margin-top:8px">Tip: "Action Required" turns on automatically when you request documents below, and clears once all are received.</p></div>' +
@@ -240,6 +240,24 @@
         if (!reason) { Hub.toast('Please enter a reason'); return; }
         Hub.busy(m.q('#rDo'), Nav.api('/api/review/' + jobId + '/return', { method: 'POST', body: { reason: reason } }))
           .then(function () { m.close(); Hub.toast('Returned'); load(); })
+          .catch(function (e) { Hub.toast(e.message); });
+      });
+    });
+    if ($('reqInfoBtn')) $('reqInfoBtn').addEventListener('click', function () {
+      var m = Hub.modal('Request more info from client',
+        '<p class="muted small">Ask the client for extra information or documents. This keeps the job in review, flags it as <b>Action required</b> for the client, and emails them your message.</p>' +
+        '<div class="field"><label>What do you need from the client?</label>' +
+        '<textarea id="riMsg" rows="4" placeholder="e.g. Please confirm the purchase date of your rental property and upload the settlement statement."></textarea></div>' +
+        '<div class="field"><label>Due date (optional)</label><input type="date" id="riDue"/></div>' +
+        '<div class="modal-actions"><button class="btn btn-ghost" id="riCancel">Cancel</button><button class="btn btn-primary" id="riDo">Send request</button></div>');
+      m.q('#riMsg').focus();
+      m.q('#riCancel').addEventListener('click', m.close);
+      m.q('#riDo').addEventListener('click', function () {
+        var msg = m.q('#riMsg').value.trim();
+        if (!msg) { Hub.toast('Please enter a message'); return; }
+        var due = m.q('#riDue').value || null;
+        Hub.busy(m.q('#riDo'), Nav.api('/api/review/' + jobId + '/request-info', { method: 'POST', body: { message: msg, dueDate: due } }))
+          .then(function () { m.close(); Hub.toast('Request sent to client'); load(); })
           .catch(function (e) { Hub.toast(e.message); });
       });
     });

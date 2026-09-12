@@ -999,6 +999,45 @@ app.post('/api/review/:id/return', requireAuth, requireRole('supervisor'), async
   finally { client.release(); }
 });
 
+// POST /api/review/:id/request-info { message, category?, dueDate? }
+// Supervisor asks the CLIENT for more information/documents during review. The job
+// stays in supervisor review, but a client-facing document request is created and the
+// job is flagged Action Required so the client is prompted to respond.
+app.post('/api/review/:id/request-info', requireAuth, requireRole('supervisor'), async (req, res) => {
+  const message = String(req.body.message || '').trim();
+  const category = String(req.body.category || '').trim();
+  const dueDate = req.body.dueDate || null;
+  if (!message) return res.status(400).json({ error: 'a message for the client is required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const jr = await client.query("SELECT * FROM jobs WHERE id=$1 AND stage='05_supervisor_review' FOR UPDATE", [req.params.id]);
+    if (!jr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'job not in review' }); }
+    const job = jr.rows[0];
+    await client.query(
+      'INSERT INTO doc_requests (job_id, category, description, due_date, created_by) VALUES ($1,$2,$3,$4,$5)',
+      [job.id, category || null, message, dueDate || null, req.user.email]);
+    await client.query('UPDATE jobs SET action_required=true, updated_at=now() WHERE id=$1', [job.id]);
+    await client.query('INSERT INTO job_status_history (job_id, from_stage, to_stage, changed_by, reason) VALUES ($1,$2,$2,$3,$4)',
+      [job.id, job.stage, req.user.email, 'Requested more info from client: ' + message]);
+    await audit(client, req.user.email, 'job.request_client_info', 'job', job.id, { message, dueDate });
+    await client.query('COMMIT');
+    // Notify the client (background).
+    const cr = await pool.query('SELECT email, name FROM clients WHERE id=$1', [job.client_id]);
+    if (cr.rows.length && cr.rows[0].email) {
+      notifyBg({
+        jobId: job.id,
+        toEmail: cr.rows[0].email,
+        rawSubject: 'We need a little more information for ' + job.id,
+        rawBody: 'Hi ' + (cr.rows[0].name || 'there') + ',\n\nWhile reviewing your job (' + job.id + '), we need a bit more information from you:\n\n' +
+          message + '\n\nPlease log in to your portal to provide it. Thank you.',
+      });
+    }
+    res.json({ ok: true });
+  } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
+  finally { client.release(); }
+});
+
 // ================= DOCUMENTS =================
 const ALLOWED_MIME = [
   'application/pdf', 'image/jpeg', 'image/png', 'image/heic', 'image/heif',
