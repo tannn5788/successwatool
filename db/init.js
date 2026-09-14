@@ -26,6 +26,17 @@ async function upsertUser(email, name, password, role) {
     [email, name, hash, salt, role]);
 }
 
+// Create a user only if it does not already exist — never overwrites an existing
+// password/role (so accounts created here can be changed later without being reset on deploy).
+async function createUserIfMissing(email, name, password, role) {
+  const { salt, hash } = hashPassword(password);
+  await pool.query(
+    `INSERT INTO users (email, name, pass_hash, pass_salt, role, active)
+     VALUES ($1,$2,$3,$4,$5,true)
+     ON CONFLICT (email) DO NOTHING`,
+    [email, name, hash, salt, role]);
+}
+
 const TEMPLATES = [
   ['documents_received', 'We have received your documents', 'Hi {{clientName}},\n\nThank you — we have received your documents for job {{jobId}} and have started work.\n\nElite Tax & Wealth Advisory'],
   ['supervisor_review', 'Your work is under review', 'Hi {{clientName}},\n\nYour work for job {{jobId}} is now being reviewed by a senior team member.\n\nElite Tax & Wealth Advisory'],
@@ -85,6 +96,12 @@ async function seedDemo() {
     await upsertUser('reception@successwa.com', 'Reception User', 'recep123', 'reception');
     await upsertUser('demo@successwa.com', 'Demo Client', 'demo123', 'client');
 
+    // Offshore staff accounts (mapped to the accountant role). Created only if missing,
+    // so passwords/roles you change later are preserved across deploys.
+    await createUserIfMissing('offshore1@successwa.com', 'Offshore Staff 1', 'offshore123', 'accountant');
+    await createUserIfMissing('offshore2@successwa.com', 'Offshore Staff 2', 'offshore123', 'accountant');
+    await createUserIfMissing('offshore3@successwa.com', 'Offshore Staff 3', 'offshore123', 'accountant');
+
     await seedTemplates();
     await seedDemo();
 
@@ -97,6 +114,9 @@ async function seedDemo() {
     console.log('  accountant@successwa.com / acct123    (accountant)');
     console.log('  reception@successwa.com / recep123    (reception)');
     console.log('  demo@successwa.com / demo123          (client)');
+    console.log('  offshore1@successwa.com / offshore123  (accountant/offshore)');
+    console.log('  offshore2@successwa.com / offshore123  (accountant/offshore)');
+    console.log('  offshore3@successwa.com / offshore123  (accountant/offshore)');
   } catch (e) {
     console.error('Init failed:', e.message);
     process.exit(1);
