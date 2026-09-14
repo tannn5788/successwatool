@@ -19,6 +19,7 @@ const recurring = require('./recurring');
 const { sendNotification } = require('./notify');
 const gdrive = require('./google-drive');
 const gauth = require('./google-auth');
+const fbauth = require('./facebook-auth');
 const mfa = require('./mfa');
 
 // Fire-and-forget notification: never blocks the HTTP response. The row is still
@@ -359,6 +360,69 @@ app.get('/api/auth/google/callback', async (req, res) => {
   } catch (e) {
     console.error('[google login callback]', e && e.message);
     fail('Google sign-in failed. Please try again.');
+  }
+});
+
+
+// ================= "Continue with Facebook" sign-in =================
+// Same signed-state approach as Google (HMAC + 10-min window), reusing the
+// makeGoogleState/verifyGoogleState helpers above since they are generic.
+
+// GET /api/auth/facebook/start — redirect the browser to Facebook's consent screen.
+app.get('/api/auth/facebook/start', (req, res) => {
+  if (!fbauth.isConfigured()) {
+    return res.redirect('/login.html#error=' + encodeURIComponent('Facebook sign-in is not configured on the server.'));
+  }
+  try {
+    const url = fbauth.getLoginAuthUrl(baseUrl(req), makeGoogleState());
+    res.redirect(url);
+  } catch (e) {
+    console.error('[facebook login start]', e && e.message);
+    res.redirect('/login.html#error=' + encodeURIComponent('Could not start Facebook sign-in.'));
+  }
+});
+
+// GET /api/auth/facebook/callback — Facebook redirects here with ?code&state.
+app.get('/api/auth/facebook/callback', async (req, res) => {
+  const fail = (msg) => res.redirect('/login.html#error=' + encodeURIComponent(msg));
+  try {
+    const { code, state, error } = req.query;
+    if (error) return fail('Facebook sign-in was cancelled.');
+    if (!code || !verifyGoogleState(state)) return fail('Facebook sign-in expired or was invalid. Please try again.');
+
+    const profile = await fbauth.exchangeCodeForProfile(baseUrl(req), String(code));
+    if (!profile.email) {
+      return fail('We could not get an email from your Facebook account. Please use email/password or Google sign-in.');
+    }
+    const email = normAccount(profile.email);
+
+    let ur = await pool.query('SELECT email, name, role, active FROM users WHERE email=$1', [email]);
+    let u = ur.rows[0];
+
+    if (!u) {
+      // Any Facebook account may sign in; new emails become client accounts.
+      const rnd = crypto.randomBytes(24).toString('hex'); // unusable random password
+      const { salt, hash } = await hashPassword(rnd);
+      await pool.query(
+        "INSERT INTO users (email, name, pass_hash, pass_salt, role) VALUES ($1,$2,$3,$4,'client')",
+        [email, profile.name || null, hash, salt]);
+      await audit(pool, email, 'user.facebook_signup', 'user', email, {});
+      u = { email, name: profile.name || null, role: 'client', active: true };
+    }
+
+    if (!u.active) return fail('This account has been disabled. Please contact your accountant.');
+
+    // Facebook verified the user — issue the session directly (bypasses app MFA).
+    const token = await createSession(u.email, u.role);
+    await audit(pool, u.email, 'login.facebook', 'user', u.email, {});
+    const frag = '#token=' + encodeURIComponent(token) +
+      '&email=' + encodeURIComponent(u.email) +
+      '&role=' + encodeURIComponent(u.role) +
+      '&name=' + encodeURIComponent(u.name || '');
+    res.redirect('/login.html' + frag);
+  } catch (e) {
+    console.error('[facebook login callback]', e && e.message);
+    fail('Facebook sign-in failed. Please try again.');
   }
 });
 
