@@ -96,6 +96,29 @@
     var canAssign = auth.role === 'reception' || auth.role === 'supervisor' || auth.role === 'administrator';
 
     // Overdue / due-soon badge shown next to the due-date editor.
+    // Priority pill.
+    var priVal = (j.priority || 'normal').toLowerCase();
+    var priLabel = { high: 'High', normal: 'Normal', low: 'Low' }[priVal] || 'Normal';
+    var canPriority = auth.role === 'reception' || auth.role === 'supervisor' || auth.role === 'administrator';
+
+    // Work checklist.
+    var checklist = res.checklist || [];
+    var chkTotal = checklist.length;
+    var chkDone = checklist.filter(function (c) { return c.checked; }).length;
+    var reqLeft = checklist.filter(function (c) { return c.required && !c.checked; }).length;
+    var canCheck = auth.role === 'accountant' || auth.role === 'administrator' ||
+      auth.role === 'supervisor' || auth.role === 'reception';
+    var checklistHtml = chkTotal ? checklist.map(function (c) {
+      return '<li class="chk-item' + (c.checked ? ' chk-done' : '') + '">' +
+        '<label style="display:flex;gap:8px;align-items:flex-start;cursor:' + (canCheck ? 'pointer' : 'default') + '">' +
+        '<input type="checkbox" class="chk-box" data-chk="' + c.id + '"' + (c.checked ? ' checked' : '') +
+          (canCheck ? '' : ' disabled') + ' style="margin-top:3px"/>' +
+        '<span><span class="chk-label">' + esc(c.label) + '</span>' +
+        (c.required ? ' <span class="chk-req">required</span>' : ' <span class="muted small">optional</span>') +
+        (c.checked && c.checked_by ? '<div class="t-meta">' + esc(c.checked_by) + ' · ' + Hub.fmtDate(c.checked_at) + '</div>' : '') +
+        '</span></label></li>';
+    }).join('') : '<li class="muted small">No checklist for this job.</li>';
+
     var dueBadge = '';
     if (j.due_date) {
       var today = new Date(); today.setHours(0, 0, 0, 0);
@@ -121,6 +144,14 @@
         '<div class="stat" data-tip-below data-tip="The supervisor who reviews this job before signing."><div class="n small">' + esc(j.supervisor_name || j.supervisor_email || '—') + '</div><div class="l">Supervisor</div></div>' +
         '<div class="stat" data-tip-below data-tip="The internal deadline for this job. Overdue jobs are highlighted."><div class="n small"><input type="date" id="dueDateInput" value="' + esc((j.due_date || '').slice(0, 10)) + '" style="font-size:13px;padding:4px 6px" />' +
           (dueBadge ? ' ' + dueBadge : '') + '</div><div class="l">Due date</div></div>' +
+        '<div class="stat" data-tip-below data-tip="Job priority. Set by reception, supervisor or admin."><div class="n small">' +
+          (canPriority ?
+            '<select id="prioritySel" class="pri-select pri-' + priVal + '">' +
+              ['high', 'normal', 'low'].map(function (p) {
+                return '<option value="' + p + '"' + (p === priVal ? ' selected' : '') + '>' + (p.charAt(0).toUpperCase() + p.slice(1)) + '</option>';
+              }).join('') + '</select>' :
+            '<span class="pri-pill pri-' + priVal + '">' + priLabel + '</span>') +
+          '</div><div class="l">Priority</div></div>' +
       '</div>' +
       '<div class="field" style="margin-top:14px;margin-bottom:0;max-width:360px" data-tip-below data-tip="Move the job to another stage. The change applies immediately and is recorded in the audit trail."><label>Change stage (applies immediately)</label><select id="stageSel">' + stageOpts + '</select></div>' +
       '<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
@@ -137,6 +168,15 @@
           '<div><strong>✓ Signed by client</strong><div class="muted small">' + esc(j.signed_by) + ' · ' + Hub.fmtDateTime(j.signed_at) + '</div></div>' +
           (j.stage === '07_ready_lodgement' ? '<span class="pill pill-completed">Ready for lodgement</span>' : '') +
         '</div>' : '') +
+
+      '<div class="section-title">Work checklist ' +
+        '<span class="chk-count' + (reqLeft > 0 ? ' chk-count-warn' : ' chk-count-ok') + '">' + chkDone + ' / ' + chkTotal + ' done</span>' +
+      '</div>' +
+      '<div class="card" data-tip-below data-tip="Tick off each step as you complete the work. Required items must be done before the job can be sent to the supervisor.">' +
+        (reqLeft > 0 ? '<div class="chk-warning">⚠ ' + reqLeft + ' required item' + (reqLeft === 1 ? '' : 's') + ' left — complete these before sending to the supervisor.</div>' :
+          (chkTotal ? '<div class="chk-ok">✓ All required items complete — ready to send for review.</div>' : '')) +
+        '<ul class="checklist">' + checklistHtml + '</ul>' +
+      '</div>' +
 
       '<div class="section-title">Documents' +
         (j.drive_folder_link ? ' <a href="' + esc(j.drive_folder_link) + '" target="_blank" rel="noopener" class="btn btn-xs" style="vertical-align:middle;margin-left:8px" data-tip="Open this client\u2019s Google Drive backup folder in a new tab.">📁 Open Drive folder</a>' : '') +
@@ -207,6 +247,23 @@
     $('holdBtn').addEventListener('click', function () {
       Nav.api('/api/jobs/' + jobId + '/flags', { method: 'POST', body: { onHold: !j.on_hold } })
         .then(function () { Hub.toast('Updated'); load(); }).catch(function (e) { Hub.toast(e.message); });
+    });
+    // ---- Priority ----
+    if ($('prioritySel')) $('prioritySel').addEventListener('change', function () {
+      var val = $('prioritySel').value;
+      Nav.api('/api/jobs/' + jobId + '/priority', { method: 'PATCH', body: { priority: val } })
+        .then(function () { Hub.toast('Priority set to ' + val); load(); })
+        .catch(function (e) { Hub.toast(e.message); load(); });
+    });
+    // ---- Work checklist ----
+    Array.prototype.forEach.call(document.querySelectorAll('.chk-box'), function (box) {
+      box.addEventListener('change', function () {
+        var id = box.getAttribute('data-chk');
+        var checked = box.checked;
+        Nav.api('/api/jobs/' + jobId + '/checklist/' + id, { method: 'POST', body: { checked: checked } })
+          .then(function () { load(); })
+          .catch(function (e) { Hub.toast(e.message); box.checked = !checked; });
+      });
     });
     if ($('delJobBtn')) $('delJobBtn').addEventListener('click', function () {
       var m = Hub.modal('Delete job ' + j.id,

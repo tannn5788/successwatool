@@ -13,6 +13,7 @@ const { Pool, types } = require('pg');
 // which shifts back a day when serialized to UTC JSON. Keep dates as 'YYYY-MM-DD'.
 types.setTypeParser(1082, (v) => v);
 const wf = require('./workflow');
+const checklists = require('./checklists');
 const { sendNotification } = require('./notify');
 const gdrive = require('./google-drive');
 const gauth = require('./google-auth');
@@ -650,7 +651,9 @@ app.get('/api/jobs', requireAuth, requireRole.apply(null, STAFF), async (req, re
     }
     let sql =
       `SELECT j.*, c.name AS client_name, e.entity_name,
-              ua.name AS accountant_name, us.name AS supervisor_name
+              ua.name AS accountant_name, us.name AS supervisor_name,
+              (SELECT COUNT(*)::int FROM job_checklist_items ci WHERE ci.job_id=j.id) AS checklist_total,
+              (SELECT COUNT(*)::int FROM job_checklist_items ci WHERE ci.job_id=j.id AND ci.checked) AS checklist_done
        FROM jobs j
        JOIN clients c ON c.id = j.client_id
        LEFT JOIN entities e ON e.id = j.entity_id
@@ -675,7 +678,7 @@ app.get('/api/jobs', requireAuth, requireRole.apply(null, STAFF), async (req, re
 // GET /api/jobs/:id  (full detail for staff)
 app.get('/api/jobs/:id', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
   try {
-    const [jr, hist, docs, reqs, notif, notes] = await Promise.all([
+    const [jr, hist, docs, reqs, notif, notes, chk] = await Promise.all([
       pool.query(
         `SELECT j.*, c.name AS client_name, c.email AS client_email, c.drive_folder_link,
                 e.entity_name, e.entity_type,
@@ -689,6 +692,7 @@ app.get('/api/jobs/:id', requireAuth, requireRole.apply(null, STAFF), async (req
       pool.query('SELECT * FROM doc_requests WHERE job_id=$1 ORDER BY created_at DESC', [req.params.id]),
       pool.query('SELECT * FROM notifications WHERE job_id=$1 ORDER BY created_at DESC', [req.params.id]),
       pool.query('SELECT jn.*, u.name AS author_name FROM job_notes jn LEFT JOIN users u ON lower(u.email)=lower(jn.author) WHERE jn.job_id=$1 ORDER BY jn.created_at DESC', [req.params.id]),
+      pool.query('SELECT * FROM job_checklist_items WHERE job_id=$1 ORDER BY sort_order, id', [req.params.id]),
     ]);
     if (!jr.rows.length) return res.status(404).json({ error: 'job not found' });
     const job = jr.rows[0];
@@ -698,7 +702,7 @@ app.get('/api/jobs/:id', requireAuth, requireRole.apply(null, STAFF), async (req
     }
     job.stage_label = (wf.STAGE_MAP[job.stage] || {}).internalLabel || job.stage;
     job.next_action = wf.NEXT_ACTION[job.stage] || '';
-    res.json({ ok: true, job, history: hist.rows, documents: docs.rows, docRequests: reqs.rows, notifications: notif.rows, notes: notes.rows, stages: wf.STAGES, stageMap: wf.STAGE_MAP });
+    res.json({ ok: true, job, history: hist.rows, documents: docs.rows, docRequests: reqs.rows, notifications: notif.rows, notes: notes.rows, checklist: chk.rows, stages: wf.STAGES, stageMap: wf.STAGE_MAP });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -711,6 +715,8 @@ app.post('/api/jobs', requireAuth, requireRole.apply(null, STAFF), async (req, r
   const accountant = normAccount(req.body.accountant);
   const supervisor = normAccount(req.body.supervisor);
   const dueDate = String(req.body.dueDate || '').trim() || null; // YYYY-MM-DD or null
+  const priority = ['high', 'normal', 'low'].indexOf(String(req.body.priority || '').toLowerCase()) !== -1
+    ? String(req.body.priority).toLowerCase() : 'normal';
   if (!clientId) return res.status(400).json({ error: 'clientId required' });
   const roleErr = await validateAssignment(accountant, supervisor);
   if (roleErr) return res.status(400).json({ error: roleErr });
@@ -721,12 +727,19 @@ app.post('/api/jobs', requireAuth, requireRole.apply(null, STAFF), async (req, r
     if (!ex.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'client not found' }); }
     const id = await nextId(client, 'job', 'JB-');
     await client.query(
-      `INSERT INTO jobs (id, client_id, entity_id, job_type, financial_year, accountant_email, supervisor_email, due_date, stage)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'01_created')`,
-      [id, clientId, entityId || null, jobType || null, fy || null, accountant || null, supervisor || null, dueDate]);
+      `INSERT INTO jobs (id, client_id, entity_id, job_type, financial_year, accountant_email, supervisor_email, due_date, priority, stage)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'01_created')`,
+      [id, clientId, entityId || null, jobType || null, fy || null, accountant || null, supervisor || null, dueDate, priority]);
+    // Seed the work checklist from the template that matches this job type.
+    const tpl = checklists.templateFor(jobType);
+    for (let i = 0; i < tpl.length; i++) {
+      await client.query(
+        'INSERT INTO job_checklist_items (job_id, label, required, sort_order) VALUES ($1,$2,$3,$4)',
+        [id, tpl[i].label, tpl[i].required !== false, i]);
+    }
     await client.query('INSERT INTO job_status_history (job_id, from_stage, to_stage, changed_by, reason) VALUES ($1,$2,$3,$4,$5)',
       [id, null, '01_created', req.user.email, 'Job created']);
-    await audit(client, req.user.email, 'job.create', 'job', id, { clientId, entityId, jobType, accountant, supervisor });
+    await audit(client, req.user.email, 'job.create', 'job', id, { clientId, entityId, jobType, accountant, supervisor, priority });
     await client.query('COMMIT');
     // Notify assigned staff that a new job has landed on their plate (background).
     const jobLabel = (jobType || 'Tax job') + (fy ? ' (' + fy + ')' : '');
@@ -773,6 +786,15 @@ app.post('/api/jobs/:id/stage', requireAuth, requireRole.apply(null, STAFF), asy
     if (!jr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'job not found' }); }
     const job = jr.rows[0];
     if (!wf.canTransition(job.stage, toStage)) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'invalid transition' }); }
+    // Gate: cannot send to supervisor review until all REQUIRED checklist items are done.
+    if (toStage === '05_supervisor_review') {
+      const inc = await client.query(
+        'SELECT COUNT(*)::int AS n FROM job_checklist_items WHERE job_id=$1 AND required AND NOT checked', [job.id]);
+      if (inc.rows[0].n > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Complete the required checklist items before sending for review (' + inc.rows[0].n + ' remaining).' });
+      }
+    }
     await changeStage(client, job, toStage, req.user.email, reason);
     await client.query('COMMIT');
     // Fire notification for the new stage (outside txn).
@@ -798,6 +820,43 @@ app.post('/api/jobs/:id/flags', requireAuth, requireRole.apply(null, STAFF), asy
     res.json({ ok: true });
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
   finally { client.release(); }
+});
+
+// POST /api/jobs/:id/checklist/:itemId { checked }  — tick/untick a work-checklist item.
+// Staff only; accountants may only touch their own jobs.
+app.post('/api/jobs/:id/checklist/:itemId', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  const checked = !!req.body.checked;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const jr = await client.query('SELECT * FROM jobs WHERE id=$1 FOR UPDATE', [req.params.id]);
+    if (!jr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'job not found' }); }
+    if (req.user.role === 'accountant' && normAccount(jr.rows[0].accountant_email) !== normAccount(req.user.email)) {
+      await client.query('ROLLBACK'); return res.status(403).json({ error: 'You can only update jobs assigned to you' });
+    }
+    const upd = await client.query(
+      `UPDATE job_checklist_items SET checked=$1, checked_by=$2, checked_at=$3
+       WHERE id=$4 AND job_id=$5 RETURNING id`,
+      [checked, checked ? req.user.email : null, checked ? new Date() : null, req.params.itemId, req.params.id]);
+    if (!upd.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'checklist item not found' }); }
+    await audit(client, req.user.email, 'job.checklist', 'job', req.params.id, { itemId: Number(req.params.itemId), checked });
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
+  finally { client.release(); }
+});
+
+// PATCH /api/jobs/:id/priority { priority }  — high | normal | low.
+// Reception / supervisor / administrator (same as reassign).
+app.patch('/api/jobs/:id/priority', requireAuth, requireRole('reception', 'supervisor', 'administrator'), async (req, res) => {
+  const priority = String(req.body.priority || '').toLowerCase();
+  if (['high', 'normal', 'low'].indexOf(priority) === -1) return res.status(400).json({ error: 'invalid priority' });
+  try {
+    const r = await pool.query('UPDATE jobs SET priority=$1, updated_at=now() WHERE id=$2 RETURNING id', [priority, req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'job not found' });
+    await audit(pool, req.user.email, 'job.priority', 'job', req.params.id, { priority });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // DELETE /api/jobs/:id — permanently delete a job. Administrator only (destructive).
@@ -1021,7 +1080,9 @@ app.get('/api/review/queue', requireAuth, requireRole('supervisor'), async (req,
     const r = await pool.query(
       `SELECT j.*, c.name AS client_name, c.email AS client_email, e.entity_name,
               (SELECT COUNT(*)::int FROM documents d WHERE d.job_id=j.id) AS doc_count,
-              (SELECT COUNT(*)::int FROM doc_requests dr WHERE dr.job_id=j.id AND dr.status='pending') AS pending_reqs
+              (SELECT COUNT(*)::int FROM doc_requests dr WHERE dr.job_id=j.id AND dr.status='pending') AS pending_reqs,
+              (SELECT COUNT(*)::int FROM job_checklist_items ci WHERE ci.job_id=j.id) AS checklist_total,
+              (SELECT COUNT(*)::int FROM job_checklist_items ci WHERE ci.job_id=j.id AND ci.checked) AS checklist_done
        FROM jobs j JOIN clients c ON c.id=j.client_id
        LEFT JOIN entities e ON e.id=j.entity_id
        WHERE j.stage='05_supervisor_review' ORDER BY j.stage_since`, []);

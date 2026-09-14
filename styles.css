@@ -891,3 +891,98 @@ tr.row-selected td{background:var(--green-soft)}
 .page-guide .pg-body a{color:var(--green-text);font-weight:600}
 .page-guide .pg-close{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px 4px}
 .page-guide .pg-close:hover{color:var(--text)}
+
+/* ===== Priority pills + selects (Phase 1 Đợt 1) ===== */
+.pri-pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:700; letter-spacing:.02em; text-transform:uppercase; }
+.pri-high   { background:#fdecea; color:#b3261e; border:1px solid #f4c7c3; }
+.pri-normal { background:#eef1f6; color:#4a5568; border:1px solid #dbe1ea; }
+.pri-low    { background:#eafaf1; color:#1e7b46; border:1px solid #c6ecd6; }
+.pri-select { font-size:13px; padding:4px 6px; border-radius:8px; border:1px solid var(--line, #dbe1ea); font-weight:700; }
+.pri-select.pri-high   { color:#b3261e; }
+.pri-select.pri-normal { color:#4a5568; }
+.pri-select.pri-low    { color:#1e7b46; }
+
+/* ===== Work checklist ===== */
+.chk-count { display:inline-block; margin-left:8px; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700; vertical-align:middle; }
+.chk-count-warn { background:#fff4e5; color:#b25a00; border:1px solid #ffd9a8; }
+.chk-count-ok   { background:#eafaf1; color:#1e7b46; border:1px solid #c6ecd6; }
+.chk-warning { background:#fff4e5; color:#8a4b00; border:1px solid #ffd9a8; border-radius:10px; padding:10px 12px; margin-bottom:12px; font-size:13px; font-weight:600; }
+.chk-ok { background:#eafaf1; color:#1e7b46; border:1px solid #c6ecd6; border-radius:10px; padding:10px 12px; margin-bottom:12px; font-size:13px; font-weight:600; }
+ul.checklist { list-style:none; margin:0; padding:0; }
+ul.checklist li.chk-item { padding:8px 4px; border-bottom:1px solid var(--line, #eef1f6); }
+ul.checklist li.chk-item:last-child { border-bottom:none; }
+ul.checklist li.chk-done .chk-label { text-decoration:line-through; color:#8a94a6; }
+.chk-label { font-size:14px; }
+.chk-req { display:inline-block; margin-left:6px; font-size:10px; font-weight:700; text-transform:uppercase; color:#b3261e; background:#fdecea; border-radius:6px; padding:1px 6px; }
+
+/* ===== Accountant dashboard: due groups ===== */
+.due-group { margin-bottom:20px; }
+.due-group-head { font-family:'Archivo',sans-serif; font-weight:700; font-size:15px; margin:0 0 8px; display:flex; align-items:center; gap:8px; }
+.due-group-count { display:inline-block; min-width:22px; text-align:center; padding:1px 8px; border-radius:999px; font-size:12px; background:#eef1f6; color:#4a5568; }
+.grp-overdue .due-group-head { color:#b3261e; }
+.grp-overdue .due-group-count { background:#fdecea; color:#b3261e; }
+.grp-today .due-group-head { color:#b25a00; }
+.grp-today .due-group-count { background:#fff4e5; color:#b25a00; }
+
+/* ===== Admin dashboard: workload by staff ===== */
+#workloadWrap { margin-top:8px; }
+.wl-row { display:flex; align-items:center; gap:12px; padding:7px 0; border-bottom:1px solid var(--line,#eef1f6); }
+.wl-row:last-child { border-bottom:none; }
+.wl-name { flex:0 0 200px; font-size:14px; font-weight:600; }
+.wl-bar { flex:1; height:10px; background:#eef1f6; border-radius:999px; overflow:hidden; }
+.wl-fill { height:100%; background:linear-gradient(90deg,#7aa2ff,#4a7bff); border-radius:999px; }
+.wl-num { flex:0 0 32px; text-align:right; font-weight:700; font-size:14px; }
+/* ===== Dashboard stats redesign: hero + pipeline strip ===== */
+#statCards.stat-cards { display:block; border:none; margin:18px 0 24px; }
+.stat-hero { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+@media(max-width:760px){ .stat-hero{ grid-template-columns:repeat(2,1fr); } }
+.hero-card { position:relative; background:var(--surface,#fff); border:1px solid var(--border-soft,#e7e2da); border-radius:14px; padding:16px 18px; overflow:hidden; }
+.hero-card .hero-num { font-family:var(--serif,'Archivo',sans-serif); font-size:34px; font-weight:800; line-height:1; letter-spacing:-.03em; color:#9aa3af; }
+.hero-card .hero-label { font-family:var(--mono); font-size:10px; margin-top:8px; font-weight:600; text-transform:uppercase; letter-spacing:1.3px; color:var(--muted,#8a94a6); }
+.hero-card::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:#d7dbe2; }
+/* Muted by default; light up only when count > 0. */
+.hero-card.hero-on .hero-num { color:var(--text,#1f2430); }
+.hero-overdue.hero-on { background:#fdecea; border-color:#f4c7c3; }
+.hero-overdue.hero-on::before { background:#c0392b; }
+.hero-overdue.hero-on .hero-num { color:#b3261e; }
+.hero-today.hero-on { background:#fff4e5; border-color:#ffd9a8; }
+.hero-today.hero-on::before { background:#d97706; }
+.hero-today.hero-on .hero-num { color:#b45309; }
+.hero-week.hero-on::before { background:#2563eb; }
+.hero-week.hero-on .hero-num { color:#1d4ed8; }
+.hero-wait.hero-on::before { background:#6b7280; }
+.hero-wait.hero-on .hero-num { color:#4b5563; }
+
+.stat-strip { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.strip-chip { display:inline-flex; align-items:baseline; gap:7px; background:var(--surface-2,#f6f4f0); border:1px solid var(--border-soft,#e7e2da); border-radius:999px; padding:6px 14px; }
+.strip-chip .strip-num { font-weight:800; font-size:15px; color:var(--text,#1f2430); font-family:var(--serif,'Archivo',sans-serif); }
+.strip-chip .strip-label { font-size:12px; color:var(--muted,#6b7280); font-weight:600; }
+/* ===== Dashboard stats: always-on color ===== */
+/* Hero cards keep a soft tint even at 0, and intensify when active. */
+.hero-overdue { background:#fdf0ef; border-color:#f6d4d0; }
+.hero-overdue::before { background:#e0908a; }
+.hero-overdue .hero-num { color:#cf7b74; }
+.hero-today { background:#fff8ef; border-color:#ffe6c4; }
+.hero-today::before { background:#e5b878; }
+.hero-today .hero-num { color:#c99a55; }
+.hero-week { background:#eff4ff; border-color:#d4e0fb; }
+.hero-week::before { background:#93b0ef; }
+.hero-week .hero-num { color:#6f92dd; }
+.hero-wait { background:#f4f5f7; border-color:#e2e5ea; }
+.hero-wait::before { background:#b3bac4; }
+.hero-wait .hero-num { color:#8a94a2; }
+
+/* Colored pipeline chips. */
+.strip-chip.chip-total { background:#eef6f2; border-color:#cfe8db; }
+.strip-chip.chip-total .strip-num { color:#1e7b46; }
+.strip-chip.chip-review { background:#eef2fe; border-color:#d4ddfb; }
+.strip-chip.chip-review .strip-num { color:#1d4ed8; }
+.strip-chip.chip-sign { background:#fff4e5; border-color:#ffddb0; }
+.strip-chip.chip-sign .strip-num { color:#b45309; }
+.strip-chip.chip-lodge { background:#f0f7ff; border-color:#cfe4fb; }
+.strip-chip.chip-lodge .strip-num { color:#0369a1; }
+.strip-chip.chip-hold { background:#f3f4f6; border-color:#e0e3e8; }
+.strip-chip.chip-hold .strip-num { color:#6b7280; }
+.strip-chip.chip-done { background:#eafaf1; border-color:#c6ecd6; }
+.strip-chip.chip-done .strip-num { color:#1e7b46; }
+.strip-chip .strip-label { color:#5b6472; }

@@ -129,6 +129,23 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS signed_by TEXT;
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ;
 -- Job deadline (added post-launch; safe to re-run)
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS due_date DATE;
+-- Job priority (added post-launch; safe to re-run): high | normal | low
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+
+-- Per-job work checklist items (seeded from a template based on job_type when the job is created).
+-- Offshore staff tick these off; required items must be complete before a job can go to supervisor review.
+CREATE TABLE IF NOT EXISTS job_checklist_items (
+  id          SERIAL PRIMARY KEY,
+  job_id      TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  label       TEXT NOT NULL,
+  required    BOOLEAN NOT NULL DEFAULT true,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  checked     BOOLEAN NOT NULL DEFAULT false,
+  checked_by  TEXT,
+  checked_at  TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_job ON job_checklist_items(job_id);
 
 -- Stage change history (audit of workflow transitions)
 CREATE TABLE IF NOT EXISTS job_status_history (

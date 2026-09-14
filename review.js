@@ -21,13 +21,19 @@
     document.getElementById('wrap').innerHTML = jobs.map(function (j) {
       var days = (j.days_in_review != null) ? j.days_in_review : 0;
       var isNew = days < 1;
+      var pri = (j.priority || 'normal').toLowerCase();
+      var priLabel = { high: 'High', normal: 'Normal', low: 'Low' }[pri] || 'Normal';
+      var chkTotal = Number(j.checklist_total) || 0;
+      var chkDone = Number(j.checklist_done) || 0;
+      var chkTxt = chkTotal ? ' · ☑ checklist ' + chkDone + '/' + chkTotal : '';
       return '<div class="card" style="margin-bottom:16px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">' +
         '<div><h3>' + esc(j.id) + ' · ' + esc(j.client_name) +
+          ' <span class="pri-pill pri-' + pri + '" style="vertical-align:middle">' + priLabel + '</span>' +
           (isNew ? ' <span class="pill pill-action" style="vertical-align:middle">NEW</span>' : '') + '</h3>' +
         '<p class="muted small">' + esc(j.entity_name || '') + (j.entity_name ? ' · ' : '') +
           esc(j.job_type || '') + ' · ' + esc(j.financial_year || '') + '</p>' +
         '<p class="muted small">Accountant: ' + esc(j.accountant_email || '—') + ' · ' + days + 'd in review · ' +
-          (j.doc_count || 0) + ' document(s)' +
+          (j.doc_count || 0) + ' document(s)' + chkTxt +
           (j.pending_reqs > 0 ? ' · <span style="color:var(--red)">' + j.pending_reqs + ' outstanding</span>' : '') + '</p></div>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" data-detail="' + esc(j.id) + '">Review details</button>' +
         '<button class="btn btn-primary btn-sm" data-approve="' + esc(j.id) + '">Approve</button>' +
@@ -113,7 +119,13 @@
         return '<li>' + esc(Hub.STAGE_LABEL[h.to_stage] || h.to_stage) + (h.reason ? ' — ' + esc(h.reason) : '') +
           '<div class="t-meta">' + esc(h.changed_by || 'system') + ' · ' + Hub.fmtDate(h.created_at) + '</div></li>';
       }).join('');
+      var chk = (r.checklist || []);
+      var chkHtml = chk.length ? chk.map(function (c) {
+        return '<li>' + (c.checked ? '<span style="color:var(--ok)">✓</span> ' : '<span style="color:var(--red)">▢</span> ') +
+          esc(c.label) + (c.required ? ' <span class="chk-req">required</span>' : '') + '</li>';
+      }).join('') : '<li class="muted small">No checklist.</li>';
       box.innerHTML =
+        '<div class="section-title">Work checklist</div><ul class="timeline">' + chkHtml + '</ul>' +
         '<div class="section-title">Documents submitted</div><ul class="timeline">' + docsHtml + '</ul>' +
         '<div class="section-title">Outstanding items</div><ul class="timeline">' + reqHtml + '</ul>' +
         '<div class="section-title">Recent history</div><ul class="timeline">' + histHtml + '</ul>' +
