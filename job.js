@@ -142,7 +142,10 @@
         '<div class="stat" data-tip-below data-tip="The detailed internal workflow stage — staff only."><div class="n small">' + esc(j.stage_label) + '</div><div class="l">Internal stage</div></div>' +
         '<div class="stat" data-tip-below data-tip="The accountant preparing this job."><div class="n small">' + esc(j.accountant_name || j.accountant_email || '—') + '</div><div class="l">Accountant</div></div>' +
         '<div class="stat" data-tip-below data-tip="The supervisor who reviews this job before signing."><div class="n small">' + esc(j.supervisor_name || j.supervisor_email || '—') + '</div><div class="l">Supervisor</div></div>' +
-        '<div class="stat" data-tip-below data-tip="The internal deadline for this job. Overdue jobs are highlighted."><div class="n small"><input type="date" id="dueDateInput" value="' + esc((j.due_date || '').slice(0, 10)) + '" style="font-size:13px;padding:4px 6px" />' +
+        '<div class="stat" data-tip-below data-tip="The internal deadline for this job. Overdue jobs are highlighted.' + (canAssign ? '' : ' Only reception, supervisor or admin can change it.') + '"><div class="n small">' +
+          (canAssign ?
+            '<input type="date" id="dueDateInput" value="' + esc((j.due_date || '').slice(0, 10)) + '" style="font-size:13px;padding:4px 6px" />' :
+            (j.due_date ? Hub.fmtDate(j.due_date) : '<span class="muted">—</span>')) +
           (dueBadge ? ' ' + dueBadge : '') + '</div><div class="l">Due date</div></div>' +
         '<div class="stat" data-tip-below data-tip="Job priority. Set by reception, supervisor or admin."><div class="n small">' +
           (canPriority ?

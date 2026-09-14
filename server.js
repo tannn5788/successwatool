@@ -945,8 +945,9 @@ app.post('/api/jobs/:id/assign', requireAuth, requireRole('reception', 'supervis
   finally { client.release(); }
 });
 
-// PATCH /api/jobs/:id/due-date { dueDate } — set or clear a job's deadline (staff).
-app.patch('/api/jobs/:id/due-date', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+// PATCH /api/jobs/:id/due-date { dueDate } — set or clear a job's deadline.
+// Accountants (offshore) cannot change deadlines — reception / supervisor / administrator only.
+app.patch('/api/jobs/:id/due-date', requireAuth, requireRole('reception', 'supervisor', 'administrator'), async (req, res) => {
   const raw = String(req.body.dueDate || '').trim();
   // Empty clears the date; otherwise require YYYY-MM-DD.
   const dueDate = raw || null;
