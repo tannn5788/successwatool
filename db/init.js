@@ -44,6 +44,7 @@ const TEMPLATES = [
   ['awaiting_signature', 'Your documents are ready to sign', 'Hi {{clientName}},\n\nYour documents for job {{jobId}} are ready. Please review and sign at your earliest convenience.\n\nElite Tax & Wealth Advisory'],
   ['lodged', 'Your return has been lodged', 'Hi {{clientName}},\n\nGood news — job {{jobId}} has been lodged with the ATO.\n\nElite Tax & Wealth Advisory'],
   ['completed', 'Your job is complete', 'Hi {{clientName}},\n\nJob {{jobId}} is now complete. Thank you for choosing Elite Tax & Wealth Advisory.'],
+  ['reminder_documents', 'Reminder: documents still needed', 'Hi {{clientName}},\n\nThis is a friendly reminder that we are still waiting on some documents for job {{jobId}} ({{description}}). Please log in to your portal to upload what is outstanding so we can continue.\n\nElite Tax & Wealth Advisory'],
 ];
 
 async function seedTemplates() {

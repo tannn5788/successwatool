@@ -169,6 +169,14 @@
   }
 
   // ---- New job ----
+  // Advance a YYYY-MM-DD date by one recurrence period (for the recurring schedule anchor).
+  function nextCycleDate(dateStr, frequency) {
+    var d = new Date(String(dateStr).slice(0, 10) + 'T00:00:00');
+    if (frequency === 'monthly') d.setMonth(d.getMonth() + 1);
+    else if (frequency === 'quarterly') d.setMonth(d.getMonth() + 3);
+    else d.setFullYear(d.getFullYear() + 1);
+    return d.toISOString().slice(0, 10);
+  }
   function jobModal(clientId, entityId) {
     Nav.api('/api/staff').then(function (res) {
       var staff = res.staff || [];
@@ -186,15 +194,36 @@
         '<div class="field"><label>Supervisor</label><select id="jSup">' + opts(['supervisor']) + '</select></div>' +
         '<div class="field"><label>Priority</label><select id="jPri"><option value="high">High</option><option value="normal" selected>Normal</option><option value="low">Low</option></select></div>' +
         '<div class="field"><label>Due date <span class="muted small">(optional)</span></label><input type="date" id="jDue"/></div>' +
+        '<div class="field"><label>Repeat <span class="muted small">(optional)</span></label><select id="jRepeat"><option value="">Does not repeat</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="annually">Annually</option></select></div>' +
+        '<p class="muted small" id="jRepeatHint" style="display:none">A recurring schedule will be created. The next job is generated automatically ~14 days before its due date. Set a Due date above to anchor the cycle.</p>' +
         '<div class="modal-actions"><button class="btn btn-ghost" id="jCancel">Cancel</button><button class="btn btn-primary" id="jSave">Create Job</button></div>');
       m.q('#jCancel').addEventListener('click', m.close);
+      m.q('#jRepeat').addEventListener('change', function () {
+        m.q('#jRepeatHint').style.display = m.q('#jRepeat').value ? 'block' : 'none';
+      });
       m.q('#jSave').addEventListener('click', function () {
+        var repeat = m.q('#jRepeat').value;
+        var due = m.q('#jDue').value || null;
+        if (repeat && !due) { Hub.toast('Set a due date to anchor the repeat cycle'); return; }
         Hub.busy(m.q('#jSave'), Nav.api('/api/jobs', { method: 'POST', body: {
           clientId: clientId, entityId: entityId, jobType: m.q('#jType').value.trim(),
           financialYear: m.q('#jFy').value.trim(), accountant: m.q('#jAcc').value, supervisor: m.q('#jSup').value,
           priority: m.q('#jPri').value,
-          dueDate: m.q('#jDue').value || null } }))
-          .then(function (r) { m.close(); Hub.toast('Job ' + r.id + ' created'); location.href = 'job.html?id=' + encodeURIComponent(r.id); })
+          dueDate: due } }))
+          .then(function (r) {
+            // If a repeat frequency was chosen, also create a recurring schedule anchored
+            // on the same due date + next cycle.
+            if (repeat && due) {
+              var next = nextCycleDate(due, repeat);
+              return Nav.api('/api/recurring', { method: 'POST', body: {
+                clientId: clientId, entityId: entityId, jobType: m.q('#jType').value.trim(),
+                financialYear: m.q('#jFy').value.trim(), accountant: m.q('#jAcc').value, supervisor: m.q('#jSup').value,
+                priority: m.q('#jPri').value, frequency: repeat, nextRunDate: next, leadDays: 14 } })
+                .then(function () { return r; });
+            }
+            return r;
+          })
+          .then(function (r) { m.close(); Hub.toast('Job ' + r.id + ' created' + (repeat ? ' + repeat scheduled' : '')); location.href = 'job.html?id=' + encodeURIComponent(r.id); })
           .catch(function (e) { Hub.toast(e.message); });
       });
     }).catch(function (e) { Hub.toast(e.message); });

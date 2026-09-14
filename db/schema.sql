@@ -147,6 +147,40 @@ CREATE TABLE IF NOT EXISTS job_checklist_items (
 );
 CREATE INDEX IF NOT EXISTS idx_checklist_job ON job_checklist_items(job_id);
 
+-- Reminder de-duplication lock (added post-launch; safe to re-run).
+-- The scheduler claims a row here before sending a reminder so that, under the PM2
+-- cluster (multiple processes), each reminder is sent exactly once.
+CREATE TABLE IF NOT EXISTS job_reminders (
+  id          SERIAL PRIMARY KEY,
+  ref_type    TEXT NOT NULL,   -- 'doc_request' | 'job'
+  ref_id      TEXT NOT NULL,   -- doc_request id or job id
+  kind        TEXT NOT NULL,   -- 'client_3d' | 'client_7d' | 'due_tomorrow' | 'overdue' | 'review_stale'
+  sent_to     TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (ref_type, ref_id, kind)
+);
+
+-- Recurring job schedules (added post-launch; safe to re-run). The scheduler generates
+-- a fresh job (with checklist) when next_run_date - lead_days is reached.
+CREATE TABLE IF NOT EXISTS recurring_jobs (
+  id               TEXT PRIMARY KEY,        -- RC-0001
+  client_id        TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  entity_id        TEXT REFERENCES entities(id) ON DELETE SET NULL,
+  job_type         TEXT,
+  accountant_email TEXT,
+  supervisor_email TEXT,
+  priority         TEXT NOT NULL DEFAULT 'normal',
+  frequency        TEXT NOT NULL,           -- monthly | quarterly | annually
+  next_run_date    DATE NOT NULL,           -- date the next generated job is DUE
+  lead_days        INTEGER NOT NULL DEFAULT 14,
+  financial_year   TEXT,
+  active           BOOLEAN NOT NULL DEFAULT true,
+  last_job_id      TEXT,
+  created_by       TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_recurring_client ON recurring_jobs(client_id);
+
 -- Stage change history (audit of workflow transitions)
 CREATE TABLE IF NOT EXISTS job_status_history (
   id          SERIAL PRIMARY KEY,

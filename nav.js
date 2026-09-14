@@ -70,6 +70,7 @@
     } else {
       links = [['dashboard.html', 'Dashboard'], ['clients.html', 'Clients']];
       if (a.role === 'supervisor') links.push(['review.html', 'Review Queue']);
+      if (a.role === 'reception' || a.role === 'supervisor' || a.role === 'administrator') links.push(['recurring.html', 'Recurring']);
       if (a.role === 'administrator') links.push(['admin.html', 'Admin']);
       links.push(['settings.html', 'Security']);
       links.push(['help.html', 'Help']);

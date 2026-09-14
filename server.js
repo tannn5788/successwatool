@@ -14,6 +14,8 @@ const { Pool, types } = require('pg');
 types.setTypeParser(1082, (v) => v);
 const wf = require('./workflow');
 const checklists = require('./checklists');
+const reminders = require('./reminders');
+const recurring = require('./recurring');
 const { sendNotification } = require('./notify');
 const gdrive = require('./google-drive');
 const gauth = require('./google-auth');
@@ -906,6 +908,101 @@ app.get('/api/staff', requireAuth, requireRole.apply(null, STAFF), async (req, r
     res.json({ ok: true, staff: r.rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ================= RECURRING JOB SCHEDULES =================
+const RECUR_ROLES = ['reception', 'supervisor', 'administrator'];
+
+// GET /api/recurring — list schedules with client/entity names.
+app.get('/api/recurring', requireAuth, requireRole.apply(null, RECUR_ROLES), async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT rc.*, c.name AS client_name, e.entity_name,
+              ua.name AS accountant_name, us.name AS supervisor_name
+       FROM recurring_jobs rc
+       JOIN clients c ON c.id = rc.client_id
+       LEFT JOIN entities e ON e.id = rc.entity_id
+       LEFT JOIN users ua ON lower(ua.email) = lower(rc.accountant_email)
+       LEFT JOIN users us ON lower(us.email) = lower(rc.supervisor_email)
+       ORDER BY rc.active DESC, rc.next_run_date`);
+    res.json({ ok: true, schedules: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/recurring — create a schedule.
+app.post('/api/recurring', requireAuth, requireRole.apply(null, RECUR_ROLES), async (req, res) => {
+  const clientId = String(req.body.clientId || '').trim();
+  const entityId = String(req.body.entityId || '').trim();
+  const jobType = String(req.body.jobType || '').trim();
+  const fy = String(req.body.financialYear || '').trim();
+  const accountant = normAccount(req.body.accountant);
+  const supervisor = normAccount(req.body.supervisor);
+  const priority = ['high', 'normal', 'low'].indexOf(String(req.body.priority || '').toLowerCase()) !== -1
+    ? String(req.body.priority).toLowerCase() : 'normal';
+  const frequency = String(req.body.frequency || '').toLowerCase();
+  const nextRun = String(req.body.nextRunDate || '').trim();
+  const leadDays = Number.isFinite(Number(req.body.leadDays)) ? Math.max(0, Math.floor(Number(req.body.leadDays))) : 14;
+  if (!clientId) return res.status(400).json({ error: 'clientId required' });
+  if (['monthly', 'quarterly', 'annually'].indexOf(frequency) === -1) return res.status(400).json({ error: 'invalid frequency' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(nextRun)) return res.status(400).json({ error: 'nextRunDate must be YYYY-MM-DD' });
+  const roleErr = await validateAssignment(accountant, supervisor);
+  if (roleErr) return res.status(400).json({ error: roleErr });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const ex = await client.query('SELECT id FROM clients WHERE id=$1', [clientId]);
+    if (!ex.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'client not found' }); }
+    const id = await nextId(client, 'recurring', 'RC-');
+    await client.query(
+      `INSERT INTO recurring_jobs (id, client_id, entity_id, job_type, accountant_email, supervisor_email, priority, frequency, next_run_date, lead_days, financial_year, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [id, clientId, entityId || null, jobType || null, accountant || null, supervisor || null, priority, frequency, nextRun, leadDays, fy || null, req.user.email]);
+    await audit(client, req.user.email, 'recurring.create', 'recurring', id, { clientId, jobType, frequency, nextRun });
+    await client.query('COMMIT');
+    res.json({ ok: true, id });
+  } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
+  finally { client.release(); }
+});
+
+// PATCH /api/recurring/:id — pause/resume or edit fields.
+app.patch('/api/recurring/:id', requireAuth, requireRole.apply(null, RECUR_ROLES), async (req, res) => {
+  const sets = [];
+  const params = [];
+  function set(col, val) { params.push(val); sets.push(col + '=$' + params.length); }
+  if (typeof req.body.active === 'boolean') set('active', req.body.active);
+  if (req.body.frequency && ['monthly', 'quarterly', 'annually'].indexOf(String(req.body.frequency).toLowerCase()) !== -1) set('frequency', String(req.body.frequency).toLowerCase());
+  if (req.body.nextRunDate && /^\d{4}-\d{2}-\d{2}$/.test(req.body.nextRunDate)) set('next_run_date', req.body.nextRunDate);
+  if (req.body.priority && ['high', 'normal', 'low'].indexOf(String(req.body.priority).toLowerCase()) !== -1) set('priority', String(req.body.priority).toLowerCase());
+  if (Number.isFinite(Number(req.body.leadDays))) set('lead_days', Math.max(0, Math.floor(Number(req.body.leadDays))));
+  if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
+  params.push(req.params.id);
+  try {
+    const r = await pool.query('UPDATE recurring_jobs SET ' + sets.join(', ') + ' WHERE id=$' + params.length + ' RETURNING id', params);
+    if (!r.rows.length) return res.status(404).json({ error: 'schedule not found' });
+    await audit(pool, req.user.email, 'recurring.update', 'recurring', req.params.id, req.body);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/recurring/:id — remove a schedule (does not touch already-created jobs).
+app.delete('/api/recurring/:id', requireAuth, requireRole.apply(null, RECUR_ROLES), async (req, res) => {
+  try {
+    const r = await pool.query('DELETE FROM recurring_jobs WHERE id=$1 RETURNING id', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'schedule not found' });
+    await audit(pool, req.user.email, 'recurring.delete', 'recurring', req.params.id, {});
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/recurring/:id/run-now — generate the next job immediately.
+app.post('/api/recurring/:id/run-now', requireAuth, requireRole.apply(null, RECUR_ROLES), async (req, res) => {
+  try {
+    const jobId = await recurring.generateForSchedule(pool, req.params.id, req.user.email, notifyBg, true);
+    if (!jobId) return res.status(404).json({ error: 'schedule not found' });
+    await audit(pool, req.user.email, 'recurring.run_now', 'recurring', req.params.id, { jobId });
+    res.json({ ok: true, jobId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 // POST /api/jobs/:id/assign { accountant, supervisor } — reassign staff on an existing job.
 // Only reception / supervisor / administrator may reassign.
@@ -2171,3 +2268,31 @@ app.use(function (err, req, res, next) {
 
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => console.log('Successwa + Elite Client Hub server running on http://localhost:' + PORT));
+
+// ================= BACKGROUND SCHEDULER =================
+// Runs reminders + recurring-job generation on an interval. Cluster-safe: every
+// individual send/generation is guarded by a DB lock so it happens exactly once
+// even though PM2 runs several worker processes.
+async function runScheduler() {
+  try {
+    const rem = await reminders.runReminders(pool, { notifyBg });
+    const rec = await recurring.generateDueJobs(pool, { notifyBg });
+    const parts = [];
+    if (rem && !rem.skipped) Object.keys(rem).forEach((k) => { if (rem[k]) parts.push(k + '=' + rem[k]); });
+    if (rec && rec.created) parts.push('recurring=' + rec.created);
+    if (parts.length) console.log('[scheduler]', parts.join(' '));
+  } catch (e) { console.error('[scheduler]', (e && e.message) || e); }
+}
+// First pass shortly after boot, then every 30 minutes.
+setTimeout(runScheduler, 60 * 1000);
+setInterval(runScheduler, 30 * 60 * 1000);
+
+// Admin: run the reminder sweep immediately (handy for testing/demos).
+app.post('/api/admin/run-reminders', requireAuth, requireRole('administrator'), async (req, res) => {
+  try {
+    const rem = await reminders.runReminders(pool, { notifyBg }, { force: true });
+    const rec = await recurring.generateDueJobs(pool, { notifyBg });
+    await audit(pool, req.user.email, 'scheduler.run', 'system', null, { rem, rec });
+    res.json({ ok: true, reminders: rem, recurring: rec });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
