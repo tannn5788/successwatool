@@ -21,15 +21,23 @@ function isConfigured() {
 }
 
 // Build the Facebook consent URL to send the browser to.
+// If a Login-for-Business configuration id is provided (FACEBOOK_CONFIG_ID),
+// the dialog uses config_id instead of scope (Business apps require this).
 function getLoginAuthUrl(baseUrl, state) {
-  const params = new URLSearchParams({
+  const base = {
     client_id: process.env.FACEBOOK_APP_ID,
     redirect_uri: loginRedirectUri(baseUrl),
     state: state,
-    scope: LOGIN_SCOPES,
     response_type: 'code',
-    auth_type: 'rerequest', // re-ask for email if the user declined it before
-  });
+  };
+  if (process.env.FACEBOOK_CONFIG_ID) {
+    base.config_id = process.env.FACEBOOK_CONFIG_ID;
+    base.override_default_response_type = 'true';
+  } else {
+    base.scope = LOGIN_SCOPES;
+    base.auth_type = 'rerequest'; // re-ask for email if the user declined it before
+  }
+  const params = new URLSearchParams(base);
   return 'https://www.facebook.com/' + GRAPH_VERSION + '/dialog/oauth?' + params.toString();
 }
 
