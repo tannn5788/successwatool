@@ -60,6 +60,17 @@ const pool = new Pool({
 });
 pool.on('error', (err) => { console.error('[pg pool error]', err.message); });
 
+// Pre-warm a handful of pooled connections on boot + periodically ping them so
+// Neon doesn't drop them. Without this, the first analytics request (which fans
+// out ~35 concurrent queries) pays to open many TLS connections at once (~3-5s).
+const PREWARM = Math.min(8, Number(process.env.PG_POOL_MAX || 20));
+async function warmPool() {
+  try { await Promise.all(Array.from({ length: PREWARM }, () => pool.query('SELECT 1'))); }
+  catch (e) { /* best-effort */ }
+}
+warmPool();
+setInterval(warmPool, 25000).unref();
+
 // ---- Password hashing (scrypt, async so it never blocks the event loop) ----
 function hashPassword(password, salt) {
   const s = salt || crypto.randomBytes(16).toString('hex');
@@ -2386,104 +2397,167 @@ app.get('/api/insights/summary', requireAuth, requireRole.apply(null, STAFF), as
       return parts.length ? 'WHERE ' + parts.join(' AND ') : '';
     }
     const ACTIVE = "stage <> '09_completed'";
+    const EMPTY = Promise.resolve({ rows: [] });
 
-    // Jobs per stage
-    const byStage = await pool.query(`SELECT stage, COUNT(*)::int AS n FROM jobs ${whereClause('', [])} GROUP BY stage`, params);
-    // Active jobs by type
-    const byType = await pool.query(
+    // All aggregations are fired concurrently (node-postgres starts each query
+    // immediately); a single Promise.all then waits for them together. This turns
+    // ~40 sequential Neon round-trips into a handful of concurrent batches.
+    const qByStage = pool.query(`SELECT stage, COUNT(*)::int AS n FROM jobs ${whereClause('', [])} GROUP BY stage`, params);
+    const qByType = pool.query(
       `SELECT COALESCE(NULLIF(job_type,''),'Unspecified') AS type, COUNT(*)::int AS n
          FROM jobs ${whereClause('', [ACTIVE])} GROUP BY 1 ORDER BY n DESC`, params);
-    // Active jobs by priority
-    const byPriority = await pool.query(
+    const qByPriority = pool.query(
       `SELECT COALESCE(NULLIF(priority,''),'normal') AS priority, COUNT(*)::int AS n
          FROM jobs ${whereClause('', [ACTIVE])} GROUP BY 1`, params);
-    // Overdue by due_date (active jobs only)
-    const overdue = await pool.query(
+    const qOverdue = pool.query(
       `SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ['due_date IS NOT NULL', 'due_date < CURRENT_DATE', ACTIVE])}`, params);
-    // Active vs completed
-    const active = await pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', [ACTIVE])}`, params);
-    const completed = await pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["stage = '09_completed'"])}`, params);
-    // On-hold & high-priority active jobs
-    const onHold = await pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ['on_hold = true', ACTIVE])}`, params);
-    const highPriority = await pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["priority = 'high'", ACTIVE])}`, params);
-    // Throughput: completions per month (last N months) from status history
-    const throughput = await pool.query(
+    const qActive = pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', [ACTIVE])}`, params);
+    const qCompleted = pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["stage = '09_completed'"])}`, params);
+    const qOnHold = pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ['on_hold = true', ACTIVE])}`, params);
+    const qHighPriority = pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["priority = 'high'", ACTIVE])}`, params);
+    const qThroughput = pool.query(
       `SELECT to_char(date_trunc('month', h.created_at),'YYYY-MM') AS month, COUNT(*)::int AS n
          FROM job_status_history h JOIN jobs j ON j.id = h.job_id
          ${whereClause('j', ["h.to_stage='09_completed'", `h.created_at >= now() - interval '${months} months'`])}
          GROUP BY 1 ORDER BY 1`, params);
-    // Intake: new jobs created per month (last N months)
-    const intake = await pool.query(
+    const qIntake = pool.query(
       `SELECT to_char(date_trunc('month', created_at),'YYYY-MM') AS month, COUNT(*)::int AS n
          FROM jobs ${whereClause('', [`created_at >= now() - interval '${months} months'`])} GROUP BY 1 ORDER BY 1`, params);
-    // Per-staff workload (active jobs) — firm-wide only
-    let workload = { rows: [] };
-    if (!scoped) {
-      workload = await pool.query(
-        `SELECT COALESCE(u.name, j.accountant_email, 'Unassigned') AS staff, COUNT(*)::int AS n
-           FROM jobs j LEFT JOIN users u ON lower(u.email)=lower(j.accountant_email)
-           ${whereClause('j', ['j.' + ACTIVE.slice(0)])} GROUP BY 1 ORDER BY n DESC`, params);
-    }
-    // Documents by review status
-    const docsByStatus = await pool.query(
+    const qWorkload = scoped ? EMPTY : pool.query(
+      `SELECT COALESCE(u.name, j.accountant_email, 'Unassigned') AS staff, COUNT(*)::int AS n
+         FROM jobs j LEFT JOIN users u ON lower(u.email)=lower(j.accountant_email)
+         ${whereClause('j', ['j.' + ACTIVE])} GROUP BY 1 ORDER BY n DESC`, params);
+    const qDocsByStatus = pool.query(
       `SELECT d.status, COUNT(*)::int AS n FROM documents d JOIN jobs j ON j.id=d.job_id
          ${whereClause('j', [])} GROUP BY 1 ORDER BY n DESC`, params);
-    // Documents awaiting review (status='received')
-    const docsToReview = await pool.query(
+    const qDocsToReview = pool.query(
       `SELECT COUNT(*)::int AS n FROM documents d JOIN jobs j ON j.id=d.job_id ${whereClause('j', ["d.status='received'"])}`, params);
-    // Outstanding document requests
-    const outstandingDocs = await pool.query(
+    const qOutstandingDocs = pool.query(
       `SELECT COUNT(*)::int AS n FROM doc_requests dr JOIN jobs j ON j.id=dr.job_id ${whereClause('j', ["dr.status='pending'"])}`, params);
-    // Clients served (all clients when firm-wide + no filter, else distinct from filtered jobs)
-    const clientsCount = (!scoped && !hasFilter)
-      ? await pool.query('SELECT COUNT(*)::int AS n FROM clients')
-      : await pool.query(`SELECT COUNT(DISTINCT client_id)::int AS n FROM jobs ${whereClause('', [])}`, params);
-    // Upcoming appointments (booked, future)
-    const upcomingAppts = (!scoped && !hasFilter)
-      ? await pool.query("SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now()")
-      : await pool.query(
+    const qClients = (!scoped && !hasFilter)
+      ? pool.query('SELECT COUNT(*)::int AS n FROM clients')
+      : pool.query(`SELECT COUNT(DISTINCT client_id)::int AS n FROM jobs ${whereClause('', [])}`, params);
+    const qUpcomingAppts = (!scoped && !hasFilter)
+      ? pool.query("SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now()")
+      : pool.query(
           `SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now()
              AND client_id IN (SELECT DISTINCT client_id FROM jobs ${whereClause('', [])})`, params);
-
-    // Active jobs by financial year (grouping for custom widgets)
-    const byYear = await pool.query(
+    const qByYear = pool.query(
       `SELECT COALESCE(NULLIF(financial_year,''),'Unspecified') AS year, COUNT(*)::int AS n
          FROM jobs ${whereClause('', [ACTIVE])} GROUP BY 1 ORDER BY 1 DESC`, params);
-    // New jobs created in the last 7 days
-    const newThisWeek = await pool.query(
+    const qNewThisWeek = pool.query(
       `SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["created_at >= now() - interval '7 days'"])}`, params);
-    // Completed in the last 7 days (from status history)
-    const completedThisWeek = await pool.query(
+    const qCompletedThisWeek = pool.query(
       `SELECT COUNT(*)::int AS n FROM job_status_history h JOIN jobs j ON j.id = h.job_id
          ${whereClause('j', ["h.to_stage='09_completed'", "h.created_at >= now() - interval '7 days'"])}`, params);
-    // Booked appointments in the next 7 days
-    const apptsThisWeek = (!scoped && !hasFilter)
-      ? await pool.query("SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now() AND start_time < now() + interval '7 days'")
-      : await pool.query(
+    const qApptsThisWeek = (!scoped && !hasFilter)
+      ? pool.query("SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now() AND start_time < now() + interval '7 days'")
+      : pool.query(
           `SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now() AND start_time < now() + interval '7 days'
              AND client_id IN (SELECT DISTINCT client_id FROM jobs ${whereClause('', [])})`, params);
-    // Average days jobs have sat in their current stage (active only)
-    const avgStageAge = await pool.query(
+    const qAvgStageAge = pool.query(
       `SELECT COALESCE(ROUND(AVG(EXTRACT(EPOCH FROM (now() - stage_since)) / 86400))::int, 0) AS n
          FROM jobs ${whereClause('', [ACTIVE])}`, params);
+
+    // ---- Insights 2.0 aggregations ----
+    const qCreatedCur = pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["created_at >= now() - interval '30 days'"])}`, params);
+    const qCreatedPrev = pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["created_at >= now() - interval '60 days'", "created_at < now() - interval '30 days'"])}`, params);
+    const qDoneCur = pool.query(
+      `SELECT COUNT(*)::int AS n FROM job_status_history h JOIN jobs j ON j.id=h.job_id
+         ${whereClause('j', ["h.to_stage='09_completed'", "h.created_at >= now() - interval '30 days'"])}`, params);
+    const qDonePrev = pool.query(
+      `SELECT COUNT(*)::int AS n FROM job_status_history h JOIN jobs j ON j.id=h.job_id
+         ${whereClause('j', ["h.to_stage='09_completed'", "h.created_at >= now() - interval '60 days'", "h.created_at < now() - interval '30 days'"])}`, params);
+    const qStageByPriority = pool.query(
+      `SELECT stage,
+              COUNT(*) FILTER (WHERE COALESCE(NULLIF(priority,''),'normal')='high')::int   AS high,
+              COUNT(*) FILTER (WHERE COALESCE(NULLIF(priority,''),'normal')='normal')::int AS normal,
+              COUNT(*) FILTER (WHERE COALESCE(NULLIF(priority,''),'normal')='low')::int    AS low
+         FROM jobs ${whereClause('', [ACTIVE])} GROUP BY stage`, params);
+    const qAvgStageDuration = pool.query(
+      `SELECT stage, ROUND(AVG(days)::numeric, 1)::float AS days, COUNT(*)::int AS n FROM (
+         SELECT h.to_stage AS stage,
+                EXTRACT(EPOCH FROM (LEAD(h.created_at) OVER (PARTITION BY h.job_id ORDER BY h.created_at) - h.created_at))/86400 AS days
+           FROM job_status_history h JOIN jobs j ON j.id=h.job_id ${whereClause('j', [])}
+       ) t WHERE days IS NOT NULL GROUP BY stage`, params);
+    const qCycleBox = pool.query(
+      `SELECT job_type,
+              ROUND(MIN(days)::numeric,1)::float AS min,
+              ROUND(percentile_cont(0.25) WITHIN GROUP (ORDER BY days)::numeric,1)::float AS q1,
+              ROUND(percentile_cont(0.5)  WITHIN GROUP (ORDER BY days)::numeric,1)::float AS median,
+              ROUND(percentile_cont(0.75) WITHIN GROUP (ORDER BY days)::numeric,1)::float AS q3,
+              ROUND(MAX(days)::numeric,1)::float AS max,
+              COUNT(*)::int AS n
+         FROM (
+           SELECT COALESCE(NULLIF(j.job_type,''),'Unspecified') AS job_type,
+                  EXTRACT(EPOCH FROM (h.created_at - j.created_at))/86400 AS days
+             FROM jobs j JOIN job_status_history h ON h.job_id=j.id AND h.to_stage='09_completed'
+             ${whereClause('j', [])}
+         ) t GROUP BY job_type ORDER BY median DESC`, params);
+    const qAgeHist = pool.query(
+      `SELECT width_bucket(EXTRACT(EPOCH FROM (now()-stage_since))/86400, 0, 90, 9) AS b, COUNT(*)::int AS n
+         FROM jobs ${whereClause('', [ACTIVE])} GROUP BY 1 ORDER BY 1`, params);
+    const qActivity = pool.query(
+      `SELECT to_char(h.created_at,'YYYY-MM') AS month, EXTRACT(DOW FROM h.created_at)::int AS dow, COUNT(*)::int AS n
+         FROM job_status_history h JOIN jobs j ON j.id=h.job_id
+         ${whereClause('j', [`h.created_at >= now() - interval '${months} months'`])}
+         GROUP BY 1,2 ORDER BY 1,2`, params);
+    const qWorkloadByStage = scoped ? EMPTY : pool.query(
+      `SELECT COALESCE(u.name, j.accountant_email, 'Unassigned') AS staff, j.stage, COUNT(*)::int AS n
+         FROM jobs j LEFT JOIN users u ON lower(u.email)=lower(j.accountant_email)
+         ${whereClause('j', ['j.' + ACTIVE])} GROUP BY 1,2`, params);
+    const qStaffBubble = scoped ? EMPTY : pool.query(
+      `SELECT COALESCE(u.name, j.accountant_email, 'Unassigned') AS staff,
+              COUNT(*) FILTER (WHERE j.stage<>'09_completed')::int AS active,
+              COUNT(*) FILTER (WHERE j.due_date IS NOT NULL AND j.due_date<CURRENT_DATE AND j.stage<>'09_completed')::int AS overdue,
+              COUNT(*)::int AS total
+         FROM jobs j LEFT JOIN users u ON lower(u.email)=lower(j.accountant_email)
+         ${whereClause('j', [])} GROUP BY 1 ORDER BY active DESC`, params);
+    const qApptsByService = (!scoped && !hasFilter)
+      ? pool.query(
+          `SELECT COALESCE(NULLIF(service_name,''),'Unspecified') AS service, COUNT(*)::int AS n
+             FROM appointments WHERE status='booked' AND start_time >= now() AND start_time < now() + interval '30 days'
+             GROUP BY 1 ORDER BY n DESC`)
+      : pool.query(
+          `SELECT COALESCE(NULLIF(service_name,''),'Unspecified') AS service, COUNT(*)::int AS n
+             FROM appointments WHERE status='booked' AND start_time >= now() AND start_time < now() + interval '30 days'
+               AND client_id IN (SELECT DISTINCT client_id FROM jobs ${whereClause('', [])}) GROUP BY 1 ORDER BY n DESC`, params);
+    const qOutstandingByStage = pool.query(
+      `SELECT j.stage, COUNT(*)::int AS n FROM doc_requests dr JOIN jobs j ON j.id=dr.job_id
+         ${whereClause('j', ["dr.status='pending'"])} GROUP BY j.stage ORDER BY j.stage`, params);
+
+    // Await everything together.
+    const [
+      byStage, byType, byPriority, overdue, active, completed, onHold, highPriority,
+      throughput, intake, workload, docsByStatus, docsToReview, outstandingDocs,
+      clientsCount, upcomingAppts, byYear, newThisWeek, completedThisWeek, apptsThisWeek, avgStageAge,
+      createdCur, createdPrev, doneCur, donePrev, stageByPriority, avgStageDuration, cycleBox,
+      ageHist, activity, workloadByStage, staffBubble, apptsByService, outstandingByStage
+    ] = await Promise.all([
+      qByStage, qByType, qByPriority, qOverdue, qActive, qCompleted, qOnHold, qHighPriority,
+      qThroughput, qIntake, qWorkload, qDocsByStatus, qDocsToReview, qOutstandingDocs,
+      qClients, qUpcomingAppts, qByYear, qNewThisWeek, qCompletedThisWeek, qApptsThisWeek, qAvgStageAge,
+      qCreatedCur, qCreatedPrev, qDoneCur, qDonePrev, qStageByPriority, qAvgStageDuration, qCycleBox,
+      qAgeHist, qActivity, qWorkloadByStage, qStaffBubble, qApptsByService, qOutstandingByStage
+    ]);
+
     const activeN = active.rows[0].n, completedN = completed.rows[0].n;
     const completionRate = (activeN + completedN) > 0 ? Math.round((completedN / (activeN + completedN)) * 100) : 0;
 
-    // ---- filter option lists ----
+    // ---- filter option lists (concurrent) ----
     const optParams = scoped ? [normAccount(req.user.email)] : [];
     const optScope = scoped ? 'AND lower(accountant_email)=$1' : '';
-    const yearsQ = await pool.query(
-      `SELECT DISTINCT financial_year AS v FROM jobs WHERE financial_year IS NOT NULL AND financial_year<>'' ${optScope} ORDER BY 1 DESC`, optParams);
-    const typesQ = await pool.query(
-      `SELECT DISTINCT COALESCE(NULLIF(job_type,''),'Unspecified') AS v FROM jobs WHERE 1=1 ${optScope} ORDER BY 1`, optParams);
-    let staffOpts = [];
-    if (!scoped) {
-      const sq = await pool.query(
+    const [yearsQ, typesQ, staffQ] = await Promise.all([
+      pool.query(
+        `SELECT DISTINCT financial_year AS v FROM jobs WHERE financial_year IS NOT NULL AND financial_year<>'' ${optScope} ORDER BY 1 DESC`, optParams),
+      pool.query(
+        `SELECT DISTINCT COALESCE(NULLIF(job_type,''),'Unspecified') AS v FROM jobs WHERE 1=1 ${optScope} ORDER BY 1`, optParams),
+      scoped ? EMPTY : pool.query(
         `SELECT lower(j.accountant_email) AS email, COALESCE(u.name, j.accountant_email) AS name
            FROM jobs j LEFT JOIN users u ON lower(u.email)=lower(j.accountant_email)
-          WHERE j.accountant_email IS NOT NULL AND j.accountant_email<>'' GROUP BY 1,2 ORDER BY 2`);
-      staffOpts = sq.rows;
-    }
+          WHERE j.accountant_email IS NOT NULL AND j.accountant_email<>'' GROUP BY 1,2 ORDER BY 2`)
+    ]);
+    const staffOpts = staffQ.rows;
 
     res.json({
       ok: true,
@@ -2523,6 +2597,21 @@ app.get('/api/insights/summary', requireAuth, requireRole.apply(null, STAFF), as
         { key: 'priority', label: 'Priority' },
         { key: 'year', label: 'Financial year' },
       ].concat(scoped ? [] : [{ key: 'staff', label: 'Staff' }]),
+      // ---- Insights 2.0 ----
+      deltas: {
+        created: { cur: createdCur.rows[0].n, prev: createdPrev.rows[0].n },
+        completed: { cur: doneCur.rows[0].n, prev: donePrev.rows[0].n },
+      },
+      stageByPriority: stageByPriority.rows,
+      avgStageDuration: avgStageDuration.rows,
+      cycleBox: cycleBox.rows,
+      ageHist: ageHist.rows,
+      activity: activity.rows,
+      workloadByStage: workloadByStage.rows,
+      staffBubble: staffBubble.rows,
+      apptsByService: apptsByService.rows,
+      outstandingByStage: outstandingByStage.rows,
+      stageOrder: wf.STAGES,
       stageMap: wf.STAGE_MAP,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
