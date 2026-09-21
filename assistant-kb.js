@@ -4,14 +4,14 @@
 // THIS app actually works (not generic guesses). Keep it concise and factual.
 
 const APP_KB = `
-SUCCESSWA / ELITE CLIENT HUB — PRODUCT HANDBOOK
+SYRAXX — PRODUCT HANDBOOK
 
 OVERVIEW
-Successwa is an Australian tax record-keeping web app for an accounting firm
+Syraxx is an Australian tax record-keeping web app for an accounting firm
 (Elite Tax & Wealth Advisory). It has two halves:
 1) TAX TRACKER — self-serve tools for individuals/sole traders to record income,
    expenses and deductions and see an estimated tax position. Pages: Personal, Business.
-2) ELITE CLIENT HUB — the firm's internal workflow + client portal, organised by role.
+2) SYRAXX PORTAL — the firm's internal workflow + client portal, organised by role.
 
 ROLES
 - client: the firm's customer. Sees only their own jobs via the Portal.

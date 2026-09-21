@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Help Centre — Successwa Client Hub</title>
+<title>Help Centre — Syraxx</title>
 <meta name="description" content="Role-based guide to the Successwa Client Hub — what each position (Client, Reception, Accountant, Supervisor, Administrator) can do and how the job workflow moves." />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -52,7 +52,7 @@
 
     <section class="help-hero">
       <h1>Help Centre</h1>
-      <p>A role-based guide to the Successwa Client Hub. Jump to your position below to see exactly what you can do, then read <b>The job workflow</b> to understand how a job moves from creation to lodgement.</p>
+      <p>A role-based guide to the Syraxx portal. Jump to your position below to see exactly what you can do, then read <b>The job workflow</b> to understand how a job moves from creation to lodgement.</p>
       <div class="help-cards">
         <a class="help-jump" href="#client"><span class="em">👤</span><b>Client</b><span>Portal &amp; documents</span></a>
         <a class="help-jump" href="#reception"><span class="em">🗂️</span><b>Reception</b><span>Clients &amp; new jobs</span></a>
@@ -77,6 +77,29 @@
       </aside>
 
       <div class="help-body">
+
+        <section class="help-sec" id="clientactions">
+          <h2>🤝 How can we help?</h2>
+          <p class="lead">Choose an option below and we'll take care of the rest.</p>
+          <div class="contact-grid" style="grid-template-columns:repeat(2,1fr)">
+            <a class="contact-item" href="messages.html" style="display:block">
+              <div class="lbl">💬 Send us a message</div>
+              <div class="val">Ask a secure question about your work. We'll reply in your portal.</div>
+            </a>
+            <a class="contact-item" href="tel:0893705515" style="display:block">
+              <div class="lbl">📞 Call the office</div>
+              <div class="val">08 9370 5515 — Mon–Fri, 9am–5pm AWST.</div>
+            </a>
+            <a class="contact-item" href="#" id="callbackAction" style="display:block">
+              <div class="lbl">📲 Request a callback</div>
+              <div class="val">Tell us when suits and we'll call you back.</div>
+            </a>
+            <a class="contact-item" href="appointments.html" style="display:block">
+              <div class="lbl">📅 Book an appointment</div>
+              <div class="val">Pick a service and a time that works for you.</div>
+            </a>
+          </div>
+        </section>
 
         <section class="help-sec" id="client">
           <h2>👤 Client <span class="role-badge">client</span></h2>
@@ -207,7 +230,7 @@
     </div>
   </main>
 
-<script src="nav.js?v=22"></script>
+<script src="nav.js?v=30"></script>
 <script src="hub-common.js?v=43"></script>
 <script>
   (function () {
@@ -228,7 +251,7 @@
     // Sections every staff member should still see (not clients).
     var SHARED_STAFF = ['workflow', 'notifications', 'faq', 'contact'];
     // Sections clients should still see.
-    var SHARED_CLIENT = ['notifications', 'faq', 'contact'];
+    var SHARED_CLIENT = ['clientactions', 'notifications', 'faq', 'contact'];
 
     var own = ROLE_SECTIONS[a.role] || [];
     var shared = (a.role === 'client') ? SHARED_CLIENT : SHARED_STAFF;
@@ -259,6 +282,30 @@
     if (a.role === 'client') {
       var cards = document.querySelector('.help-cards');
       if (cards) cards.style.display = 'none';
+    }
+
+    // "Request a callback" — clients send a secure message asking us to call them.
+    var cb = document.getElementById('callbackAction');
+    if (cb) {
+      cb.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        if (!(window.Hub && Hub.modal)) { location.href = 'messages.html'; return; }
+        var m = Hub.modal('Request a callback',
+          '<p class="muted small">Leave a phone number and the best time to reach you. We\'ll send this securely to our team.</p>' +
+          '<div class="field"><label>Best contact number</label><input id="cbPhone" placeholder="0400 000 000"/></div>' +
+          '<div class="field"><label>Best time to call</label><input id="cbWhen" placeholder="e.g. weekday mornings"/></div>' +
+          '<div class="modal-actions"><button class="btn btn-ghost" id="cbClose">Close</button><button class="btn btn-primary" id="cbSend">Send request</button></div>');
+        m.q('#cbClose').addEventListener('click', m.close);
+        m.q('#cbSend').addEventListener('click', function () {
+          var phone = m.q('#cbPhone').value.trim();
+          var when = m.q('#cbWhen').value.trim();
+          if (!phone) { Hub.toast('Please enter a contact number'); return; }
+          var body = 'Callback requested. Number: ' + phone + (when ? '. Best time: ' + when : '') + '.';
+          Hub.busy(m.q('#cbSend'), Nav.api('/api/portal/messages', { method: 'POST', body: { body: body } }))
+            .then(function () { m.close(); Hub.toast('Callback request sent — we\'ll be in touch.'); })
+            .catch(function (e) { Hub.toast(e.message); });
+        });
+      });
     }
   })();
 </script>

@@ -71,7 +71,8 @@
         '<span class="' + pill + '">' + esc(j.clientStatus) + '</span></div>' +
         stepperHtml(j.clientSteps, j.clientStep) +
         '<div class="progress"><i style="width:' + j.progressPct + '%"></i></div>' +
-        '<p class="small">' + esc(j.clientMessage) + '</p>' +
+        '<p class="small" style="font-weight:600;margin-bottom:2px">' + esc(j.clientStepLabel || '') + '</p>' +
+        '<p class="small">' + esc(j.clientStepExplain || j.clientMessage) + '</p>' +
         (action ? '<p class="small" style="color:var(--red);font-weight:600">' +
           (j.outstanding > 0 ? j.outstanding + ' outstanding document(s) requested. ' : '') + esc(j.nextAction || '') + '</p>' : '') +
         '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">' +
@@ -119,13 +120,15 @@
             '<div class="oc-head"><span class="oc-badge">' + pending.length + '</span> Action needed — please provide the following</div>' +
             '<ul class="outstanding-list">' + pending.map(function (r) {
               return '<li><span class="oi-dot"></span><span><span class="oi-title">' + esc(r.description) + '</span>' +
-                (r.due_date ? '<br><span class="oi-due">Due ' + Hub.fmtDate(r.due_date) + '</span>' : '') + '</span></li>';
+                (r.category ? '<br><span class="oi-due muted small">' + esc(r.category) + '</span>' : '') +
+                (r.due_date ? '<br><span class="oi-due">Due ' + Hub.fmtDate(r.due_date) + '</span>' : '') + '</span>' +
+                '<button class="btn btn-primary btn-xs" data-requp="' + r.id + '" data-reqcat="' + esc(r.category || 'Other') + '" style="margin-left:auto">Upload</button></li>';
             }).join('') + '</ul>' +
           '</div>' :
           '<div class="section-title">Outstanding items</div><p class="outstanding-empty">✓ Nothing outstanding right now.</p>') +
         '<div class="section-title">Your uploaded documents</div>' +
         (docs.length ? '<table class="hub-table"><thead><tr><th>File</th><th>Category</th><th>Uploaded</th><th>Status</th><th></th></tr></thead><tbody>' + docs.map(function (d) {
-          var mine = d.uploaded_by && auth.email && d.uploaded_by.toLowerCase() === auth.email.toLowerCase();
+          var mine = d.is_own_upload === true;
           var canPreview = /\.(pdf|jpe?g|png|gif|webp|heic|heif|txt)$/i.test(d.filename || '') ||
             /^(image\/|application\/pdf|text\/)/.test(d.mime || '');
           return '<tr><td style="word-break:break-all">' + esc(d.filename) + '</td>' +
@@ -140,6 +143,12 @@
         }).join('') + '</tbody></table>' : '<p class="muted small">No documents uploaded yet.</p>');
       var signBtn = box.querySelector('[data-sign]');
       if (signBtn) signBtn.addEventListener('click', function () { signModal(id); });
+      // Per-item "Upload" buttons next to each requested document.
+      Array.prototype.forEach.call(box.querySelectorAll('[data-requp]'), function (b) {
+        b.addEventListener('click', function () {
+          uploadModal(id, { docRequestId: b.getAttribute('data-requp'), category: b.getAttribute('data-reqcat') });
+        });
+      });
       // Authenticated downloads (Bearer token can't ride on a plain <a href>).
       Array.prototype.forEach.call(box.querySelectorAll('[data-dl]'), function (a) {
         a.addEventListener('click', function (ev) {
@@ -198,15 +207,21 @@
     m.q('#sDo').addEventListener('click', function () {
       if (!m.q('#pSign').value.trim()) { Hub.toast('Please type your full name'); return; }
       if (!m.q('#pAgree').checked) { Hub.toast('Please tick the confirmation box'); return; }
-      Hub.busy(m.q('#sDo'), Nav.api('/api/portal/jobs/' + encodeURIComponent(id) + '/sign', { method: 'POST', body: { name: m.q('#pSign').value.trim() } }))
+      Hub.busy(m.q('#sDo'), Nav.api('/api/portal/jobs/' + encodeURIComponent(id) + '/sign', { method: 'POST', body: { name: m.q('#pSign').value.trim(), consent: true } }))
         .then(function () { m.close(); Hub.toast('Thank you! Your return has been signed.'); load(); })
         .catch(function (e) { Hub.toast(e.message); });
     });
   }
 
-  function uploadModal(jobId) {
-    var catOpts = Hub.DOC_CATEGORIES.map(function (c) { return '<option>' + c + '</option>'; }).join('');
-    var m = Hub.modal('Upload documents',
+  function uploadModal(jobId, opts) {
+    opts = opts || {};
+    var preCat = opts.category || null;
+    var docRequestId = opts.docRequestId || null;
+    var catOpts = Hub.DOC_CATEGORIES.map(function (c) {
+      return '<option' + (preCat && c === preCat ? ' selected' : '') + '>' + c + '</option>';
+    }).join('');
+    var m = Hub.modal(docRequestId ? 'Upload requested document' : 'Upload documents',
+      (docRequestId ? '<p class="muted small">This will be matched to the item we requested and acknowledged automatically.</p>' : '') +
       '<div class="field"><label>Category</label><select id="pCat">' + catOpts + '</select></div>' +
       '<div class="field"><label>Choose file or take a photo</label>' +
       '<input type="file" id="pFile" accept=".pdf,.jpg,.jpeg,.png,.heic,.heif,.doc,.docx,.xls,.xlsx,.csv,.txt,image/*" capture="environment"/></div>' +
@@ -217,14 +232,23 @@
       if (!f) { Hub.toast('Please choose a file'); return; }
       var fd = new FormData();
       fd.append('file', f); fd.append('jobId', jobId); fd.append('category', m.q('#pCat').value);
+      if (docRequestId) fd.append('docRequestId', docRequestId);
       Hub.busy(m.q('#pUp'), Nav.api('/api/documents/upload', { method: 'POST', body: fd }))
-        .then(function () {
-          Hub.toast('Uploaded — thank you! You can add another.');
-          // Keep the upload panel open so the client can add more files.
-          // Reset only the file picker (category stays as chosen).
-          var fileInput = m.q('#pFile');
-          if (fileInput) fileInput.value = '';
-          load(); // refresh the underlying job list/counts in the background
+        .then(function (r) {
+          if (r && r.autoAdvanced) {
+            Hub.toast('All documents received — we have started your job!');
+            m.close();
+          } else {
+            Hub.toast('Uploaded — thank you! You can add another.');
+            // Keep the panel open for a general upload so the client can add more.
+            var fileInput = m.q('#pFile');
+            if (fileInput) fileInput.value = '';
+            if (docRequestId) m.close();
+          }
+          load(); // refresh the underlying job list/counts
+          // Refresh the open detail view so the fulfilled item disappears.
+          var box = document.querySelector('[data-detail="' + jobId + '"]');
+          if (box && box.getAttribute('data-open') === '1') { viewDetail(jobId); viewDetail(jobId); }
         })
         .catch(function (e) { Hub.toast(e.message); });
     });

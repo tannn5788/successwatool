@@ -21,6 +21,7 @@ const gdrive = require('./google-drive');
 const gauth = require('./google-auth');
 const fbauth = require('./facebook-auth');
 const mfa = require('./mfa');
+const setmore = require('./setmore');
 
 // Fire-and-forget notification: never blocks the HTTP response. The row is still
 // written to the notifications table inside sendNotification; we just don't await it.
@@ -141,6 +142,42 @@ async function audit(runner, actor, action, entityType, entityId, detail) {
     [actor || null, action, entityType || null, entityId || null, detail || null]);
 }
 
+// Ensure a `clients` row exists for a client user (self sign-up / social login
+// only create a `users` row). Returns the client id. Safe to call repeatedly.
+async function ensureClientForUser(email, name) {
+  const e = normAccount(email);
+  if (!e) return null;
+  const existing = await pool.query('SELECT id FROM clients WHERE lower(email)=$1 ORDER BY id LIMIT 1', [e]);
+  if (existing.rows.length) return existing.rows[0].id;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const id = await nextId(client, 'client', 'CL-');
+    // Rely on the unique index clients_email_lower_uidx: if a concurrent request
+    // already inserted this email, DO NOTHING and we fall through to the re-select.
+    const ins = await client.query(
+      `INSERT INTO clients (id, name, email) VALUES ($1,$2,$3)
+       ON CONFLICT (lower(email)) WHERE email IS NOT NULL DO NOTHING
+       RETURNING id`,
+      [id, String(name || '').trim() || e, e]);
+    if (ins.rows.length) {
+      await audit(client, e, 'client.auto_create', 'client', ins.rows[0].id, { via: 'self-service' });
+      await client.query('COMMIT');
+      return ins.rows[0].id;
+    }
+    // Conflict: someone else created it. Roll back our unused id bump and re-read.
+    await client.query('ROLLBACK');
+    const again = await pool.query('SELECT id FROM clients WHERE lower(email)=$1 ORDER BY id LIMIT 1', [e]);
+    return again.rows.length ? again.rows[0].id : null;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (e2) {}
+    console.error('[ensureClientForUser]', err && err.message);
+    // Last-ditch: the row may exist now despite the error.
+    const fb = await pool.query('SELECT id FROM clients WHERE lower(email)=$1 ORDER BY id LIMIT 1', [e]);
+    return fb.rows.length ? fb.rows[0].id : null;
+  } finally { client.release(); }
+}
+
 // ================= AUTH =================
 function newToken() { return crypto.randomBytes(32).toString('hex'); }
 
@@ -197,6 +234,19 @@ function requireRole() {
 }
 const STAFF = ['administrator', 'supervisor', 'accountant', 'reception'];
 
+// Legacy tax-tracker data (customer_data) is keyed by an `account` (email) supplied
+// by the caller. Ensure the caller may only read/write their OWN account — staff may
+// access any account. Must run AFTER requireAuth so req.user is set.
+function enforceAccountAccess(req, res, next) {
+  const account = normAccount((req.body && req.body.account) || (req.query && req.query.account));
+  if (!account) return res.status(400).json({ error: 'account required' });
+  const isStaff = req.user && STAFF.indexOf(req.user.role) !== -1;
+  if (!isStaff && account !== normAccount(req.user.email)) {
+    return res.status(403).json({ error: 'you can only access your own account data' });
+  }
+  next();
+}
+
 // POST /api/register { email, name, password }  (public self-registration = client role)
 app.post('/api/register', async (req, res) => {
   const email = normAccount(req.body.email);
@@ -211,6 +261,7 @@ app.post('/api/register', async (req, res) => {
     await pool.query(
       "INSERT INTO users (email, name, pass_hash, pass_salt, role) VALUES ($1,$2,$3,$4,'client')",
       [email, name || null, hash, salt]);
+    await ensureClientForUser(email, name);
     const token = await createSession(email, 'client');
     res.json({ ok: true, email, name, role: 'client', token });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -349,6 +400,9 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
     if (!u.active) return fail('This account has been disabled. Please contact your accountant.');
 
+    // Make sure a client profile row exists so onboarding + profile work.
+    if (u.role === 'client') await ensureClientForUser(u.email, u.name);
+
     // Google verified the user — issue the session directly (bypasses app MFA).
     const token = await createSession(u.email, u.role);
     await audit(pool, u.email, 'login.google', 'user', u.email, {});
@@ -411,6 +465,9 @@ app.get('/api/auth/facebook/callback', async (req, res) => {
     }
 
     if (!u.active) return fail('This account has been disabled. Please contact your accountant.');
+
+    // Make sure a client profile row exists so onboarding + profile work.
+    if (u.role === 'client') await ensureClientForUser(u.email, u.name);
 
     // Facebook verified the user — issue the session directly (bypasses app MFA).
     const token = await createSession(u.email, u.role);
@@ -517,6 +574,41 @@ app.post('/api/logout', requireAuth, async (req, res) => {
 
 // GET /api/me
 app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true, user: req.user }));
+
+// ---- Per-account UI preferences (layout config only; never business data) ----
+// Scopes are allow-listed so arbitrary keys can't be written. Prefs are always
+// bound to req.user.email — a user can only read/write their OWN prefs.
+const PREF_SCOPES = ['insights'];
+
+// GET /api/me/prefs/:scope — the caller's saved prefs for a page (or {} if none).
+app.get('/api/me/prefs/:scope', requireAuth, async (req, res) => {
+  const scope = String(req.params.scope || '');
+  if (PREF_SCOPES.indexOf(scope) === -1) return res.status(400).json({ error: 'unknown scope' });
+  try {
+    const r = await pool.query('SELECT prefs FROM user_prefs WHERE email=$1 AND scope=$2',
+      [normAccount(req.user.email), scope]);
+    res.json({ ok: true, prefs: (r.rows[0] && r.rows[0].prefs) || {} });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /api/me/prefs/:scope { prefs } — upsert the caller's prefs for a page.
+app.put('/api/me/prefs/:scope', requireAuth, async (req, res) => {
+  const scope = String(req.params.scope || '');
+  if (PREF_SCOPES.indexOf(scope) === -1) return res.status(400).json({ error: 'unknown scope' });
+  const prefs = req.body && req.body.prefs;
+  if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs)) {
+    return res.status(400).json({ error: 'prefs must be an object' });
+  }
+  const json = JSON.stringify(prefs);
+  if (json.length > 8192) return res.status(400).json({ error: 'prefs too large' });
+  try {
+    await pool.query(
+      `INSERT INTO user_prefs (email, scope, prefs, updated_at) VALUES ($1,$2,$3::jsonb, now())
+       ON CONFLICT (email, scope) DO UPDATE SET prefs=EXCLUDED.prefs, updated_at=now()`,
+      [normAccount(req.user.email), scope, json]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ================= MFA (self-service, any logged-in user) =================
 // GET current MFA status for the logged-in user.
@@ -630,6 +722,7 @@ app.post('/api/clients', requireAuth, requireRole.apply(null, STAFF), async (req
     await client.query('INSERT INTO clients (id, name, email, phone) VALUES ($1,$2,$3,$4)',
       [id, name, email || null, phone || null]);
     await audit(client, req.user.email, 'client.create', 'client', id, { name, email });
+    await runAutomations(client, 'client_created', { client: { id: id, name: name, email: email || null } }, req.user.email);
     await client.query('COMMIT');
     res.json({ ok: true, id });
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
@@ -806,6 +899,11 @@ app.post('/api/jobs', requireAuth, requireRole.apply(null, STAFF), async (req, r
     await client.query('INSERT INTO job_status_history (job_id, from_stage, to_stage, changed_by, reason) VALUES ($1,$2,$3,$4,$5)',
       [id, null, '01_created', req.user.email, 'Job created']);
     await audit(client, req.user.email, 'job.create', 'job', id, { clientId, entityId, jobType, accountant, supervisor, priority });
+    // Automation events (best-effort, inside the txn): a new job was created, and possibly assigned.
+    const newJob = { id: id, client_id: clientId, job_type: jobType || null, stage: '01_created',
+      accountant_email: accountant || null, supervisor_email: supervisor || null };
+    await runAutomations(client, 'job_created', { job: newJob }, req.user.email);
+    if (accountant || supervisor) await runAutomations(client, 'job_assigned', { job: newJob }, req.user.email);
     await client.query('COMMIT');
     // Notify assigned staff that a new job has landed on their plate (background).
     const jobLabel = (jobType || 'Tax job') + (fy ? ' (' + fy + ')' : '');
@@ -838,6 +936,86 @@ async function changeStage(runner, job, toStage, actor, reason) {
   await runner.query('INSERT INTO job_status_history (job_id, from_stage, to_stage, changed_by, reason) VALUES ($1,$2,$3,$4,$5)',
     [job.id, from, toStage, actor, reason || null]);
   await audit(runner, actor, 'job.stage_change', 'job', job.id, { from, to: toStage, reason });
+  // Admin-defined automations that trigger when a job ENTERS this stage.
+  await runAutomations(runner, 'stage_enter', { job: Object.assign({}, job, { stage: toStage }) }, actor);
+}
+
+// Generic automation engine. Runs all enabled admin rules whose trigger matches an event.
+//   eventType: 'stage_enter' | 'job_created' | 'job_assigned' | 'client_created' | 'document_uploaded'
+//   ctx: { job?, client?, document? }  — whatever context the event carries.
+//   eventKey (optional): narrows rules (stage for stage_enter, job_type for job_created).
+// Best-effort: a failing rule is logged and skipped, never blocks the triggering request.
+async function runAutomations(runner, eventType, ctx, actor, eventKey) {
+  ctx = ctx || {};
+  const job = ctx.job || null;
+  const clientId = job ? job.client_id : (ctx.client ? ctx.client.id : null);
+  // Derive the matching key when not supplied.
+  let key = eventKey;
+  if (key == null) {
+    if (eventType === 'stage_enter') key = job ? job.stage : null;
+    else if (eventType === 'job_created') key = job ? (job.job_type || '') : null;
+  }
+  let rules;
+  try {
+    rules = await runner.query(
+      `SELECT * FROM stage_automations
+        WHERE trigger_type=$1 AND enabled=true
+          AND (trigger_key IS NULL OR trigger_key='' OR trigger_key=$2)
+        ORDER BY sort_order, id`,
+      [eventType, key == null ? '' : String(key)]);
+  } catch (e) { return; }
+  for (const r of rules.rows) {
+    const cfg = r.config || {};
+    try {
+      if (r.action === 'set_action_required') {
+        if (job) await runner.query('UPDATE jobs SET action_required=true, updated_at=now() WHERE id=$1', [job.id]);
+      } else if (r.action === 'clear_action_required') {
+        if (job) await runner.query('UPDATE jobs SET action_required=false, updated_at=now() WHERE id=$1', [job.id]);
+      } else if (r.action === 'add_note') {
+        const text = String(cfg.note || '').trim();
+        if (text && job) await runner.query('INSERT INTO job_notes (job_id, author, note) VALUES ($1,$2,$3)',
+          [job.id, actor || 'automation', text]);
+      } else if (r.action === 'notify_staff') {
+        const to = normAccount(cfg.email || '');
+        if (to) {
+          const subject = 'Automation: ' + automationEventLabel(eventType, ctx);
+          await runner.query(
+            `INSERT INTO notifications (job_id, to_email, template_key, subject, body, channel, status)
+             VALUES ($1,$2,'automation',$3,$4,'inapp','sent')`,
+            [job ? job.id : null, to, subject, String(cfg.note || '')]);
+        }
+      } else if (r.action === 'notify_client') {
+        // Record-only until email is wired. Uses the client's email from job or client ctx.
+        let email = null;
+        if (clientId) {
+          const cr = await runner.query('SELECT email FROM clients WHERE id=$1', [clientId]);
+          email = cr.rows[0] && cr.rows[0].email;
+        }
+        if (email && cfg.templateKey) {
+          const t = await runner.query('SELECT subject, body FROM notification_templates WHERE key=$1', [cfg.templateKey]);
+          const subj = (t.rows[0] && t.rows[0].subject) || 'Update on your job';
+          const body = (t.rows[0] && t.rows[0].body) || '';
+          await runner.query(
+            `INSERT INTO notifications (job_id, to_email, template_key, subject, body, channel, status)
+             VALUES ($1,$2,$3,$4,$5,'email','sent')`,
+            [job ? job.id : null, email, cfg.templateKey, subj, body]);
+        }
+      }
+      await audit(runner, actor || 'automation', 'automation.run', 'job', job ? job.id : (clientId || null),
+        { action: r.action, ruleId: r.id, trigger: eventType, key: key });
+    } catch (e) { /* skip failing rule */ }
+  }
+}
+
+// Short human label describing the event, used in notify_staff subject lines.
+function automationEventLabel(eventType, ctx) {
+  const job = ctx.job, client = ctx.client;
+  if (eventType === 'stage_enter' && job) return job.id + ' entered ' + job.stage;
+  if (eventType === 'job_created' && job) return 'New job ' + job.id + (job.job_type ? ' (' + job.job_type + ')' : '');
+  if (eventType === 'job_assigned' && job) return 'Job ' + job.id + ' assigned';
+  if (eventType === 'client_created' && client) return 'New client ' + client.id + (client.name ? ' (' + client.name + ')' : '');
+  if (eventType === 'document_uploaded' && job) return 'Document uploaded on ' + job.id;
+  return eventType;
 }
 
 // POST /api/jobs/:id/stage { stage, reason }
@@ -1088,6 +1266,14 @@ app.post('/api/jobs/:id/assign', requireAuth, requireRole('reception', 'supervis
     await audit(client, req.user.email, 'job.assign', 'job', req.params.id, {
       accountant: newAcc, supervisor: newSup,
       prevAccountant: job.accountant_email, prevSupervisor: job.supervisor_email });
+    // Fire job_assigned automations only when the assignment actually changed.
+    const accChanged = normAccount(job.accountant_email) !== (newAcc || '');
+    const supChanged = normAccount(job.supervisor_email) !== (newSup || '');
+    if (accChanged || supChanged) {
+      await runAutomations(client, 'job_assigned',
+        { job: Object.assign({}, job, { accountant_email: newAcc || null, supervisor_email: newSup || null }) },
+        req.user.email);
+    }
     await client.query('COMMIT');
     // Notify only newly-assigned staff (not if unchanged) — background.
     const label = (job.job_type || 'Tax job') + (job.financial_year ? ' (' + job.financial_year + ')' : '');
@@ -1173,6 +1359,27 @@ app.patch('/api/documents/:id/status', requireAuth, requireRole.apply(null, STAF
   finally { client.release(); }
 });
 
+// PATCH /api/documents/:id/visibility { visible } — staff share (or unshare) a
+// document with the client. Staff-uploaded deliverables (final returns, notices of
+// assessment) stay hidden until a staff member explicitly shares them. A client's
+// OWN uploads are always visible to them regardless of this flag.
+app.patch('/api/documents/:id/visibility', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    const visible = req.body.visible === true || req.body.visible === 'true';
+    const dr = await pool.query(
+      `SELECT d.*, j.accountant_email FROM documents d LEFT JOIN jobs j ON j.id=d.job_id WHERE d.id=$1`, [req.params.id]);
+    if (!dr.rows.length) return res.status(404).json({ error: 'document not found' });
+    const doc = dr.rows[0];
+    // Accountants may only change visibility on their own jobs.
+    if (req.user.role === 'accountant' && normAccount(doc.accountant_email) !== normAccount(req.user.email)) {
+      return res.status(403).json({ error: 'You can only manage documents on your own jobs' });
+    }
+    await pool.query('UPDATE documents SET client_visible=$1 WHERE id=$2', [visible, doc.id]);
+    await audit(pool, req.user.email, 'document.visibility', 'document', String(doc.id), { visible });
+    res.json({ ok: true, visible });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ================= Internal notes (staff-only; never shown to clients) =================
 // GET /api/jobs/:id/notes — list notes (accountants only on their own jobs).
 app.get('/api/jobs/:id/notes', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
@@ -1199,11 +1406,39 @@ app.post('/api/jobs/:id/notes', requireAuth, requireRole.apply(null, STAFF), asy
     if (req.user.role === 'accountant' && normAccount(jr.rows[0].accountant_email) !== normAccount(req.user.email)) {
       return res.status(403).json({ error: 'You can only add notes to your own jobs' });
     }
+
+    // Resolve @mentions. The client may send an explicit `mentions` array of staff emails
+    // (from the autocomplete); we validate them against active staff and never trust it blindly.
+    let mentions = [];
+    const requested = Array.isArray(req.body.mentions) ? req.body.mentions : [];
+    if (requested.length) {
+      const staff = await pool.query(
+        "SELECT lower(email) AS email FROM users WHERE role IN ('administrator','supervisor','accountant','reception') AND active=true");
+      const valid = new Set(staff.rows.map((r) => r.email));
+      const me = normAccount(req.user.email);
+      mentions = Array.from(new Set(requested
+        .map((m) => normAccount(String(m)))
+        .filter((m) => valid.has(m) && m !== me)));  // don't notify yourself
+    }
+
     const ins = await pool.query(
-      'INSERT INTO job_notes (job_id, author, note) VALUES ($1,$2,$3) RETURNING id, created_at',
-      [req.params.id, req.user.email, note]);
-    await audit(pool, req.user.email, 'job.note_add', 'job', req.params.id, { noteId: ins.rows[0].id });
-    res.json({ ok: true, id: ins.rows[0].id, created_at: ins.rows[0].created_at });
+      'INSERT INTO job_notes (job_id, author, note, mentions) VALUES ($1,$2,$3,$4) RETURNING id, created_at',
+      [req.params.id, req.user.email, note, mentions]);
+
+    // In-app bell notification for each mentioned colleague (staff-only; client never sees notes).
+    if (mentions.length) {
+      const author = req.user.name || req.user.email;
+      const snippet = note.length > 140 ? note.slice(0, 140) + '…' : note;
+      for (const to of mentions) {
+        await pool.query(
+          `INSERT INTO notifications (job_id, to_email, template_key, subject, body, channel, status)
+           VALUES ($1,$2,'mention',$3,$4,'inapp','sent')`,
+          [req.params.id, to, author + ' mentioned you on ' + req.params.id, snippet]);
+      }
+    }
+
+    await audit(pool, req.user.email, 'job.note_add', 'job', req.params.id, { noteId: ins.rows[0].id, mentions: mentions.length });
+    res.json({ ok: true, id: ins.rows[0].id, created_at: ins.rows[0].created_at, mentions: mentions });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1379,6 +1614,160 @@ const upload = multer({
 
 app.get('/api/doc-categories', requireAuth, (req, res) => res.json({ ok: true, categories: DOC_CATEGORIES }));
 
+// ================= CONTROLLED DOCUMENT FOLDERS (Stage 4) =================
+// The standard, controlled sub-folders seeded under each financial-year root.
+const STANDARD_FOLDERS = ['Income', 'Deductions', 'Rental Property', 'Shares & Crypto', 'Business', 'Other'];
+// Guard rails so a client can't create a runaway tree.
+const MAX_CLIENT_FOLDERS = 100;      // total non-system folders per client
+const MAX_FOLDER_CHILDREN = 30;      // children under a single parent
+const MAX_FOLDER_DEPTH = 4;          // year root(1) -> standard(2) -> custom(3) -> custom(4)
+
+// Compute the current Australian financial-year label, e.g. "2026 Tax" for FY2025-26.
+function currentFyLabel(d) {
+  const now = d || new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth(); // 0=Jan; AU FY starts in July (month 6)
+  const fyEnd = m >= 6 ? y + 1 : y;
+  return fyEnd + ' Tax';
+}
+
+// Resolve the client id for the logged-in client (first match wins, deterministic).
+async function clientIdForUser(email) {
+  const r = await pool.query('SELECT id FROM clients WHERE lower(email)=$1 ORDER BY id LIMIT 1', [normAccount(email)]);
+  return r.rows.length ? r.rows[0].id : null;
+}
+
+// Ensure the current financial-year root + standard sub-folders exist for a client.
+async function ensureStandardFolders(clientId) {
+  const year = currentFyLabel();
+  let root = await pool.query(
+    'SELECT id FROM doc_folders WHERE client_id=$1 AND parent_id IS NULL AND name=$2', [clientId, year]);
+  let rootId;
+  if (!root.rows.length) {
+    const ins = await pool.query(
+      'INSERT INTO doc_folders (client_id, parent_id, name, year, is_system, created_by) VALUES ($1,NULL,$2,$2,true,$3) RETURNING id',
+      [clientId, year, 'system']);
+    rootId = ins.rows[0].id;
+  } else {
+    rootId = root.rows[0].id;
+  }
+  for (const name of STANDARD_FOLDERS) {
+    const ex = await pool.query(
+      'SELECT id FROM doc_folders WHERE client_id=$1 AND parent_id=$2 AND name=$3', [clientId, rootId, name]);
+    if (!ex.rows.length) {
+      await pool.query(
+        'INSERT INTO doc_folders (client_id, parent_id, name, year, is_system, created_by) VALUES ($1,$2,$3,$4,true,$5)',
+        [clientId, rootId, name, year, 'system']);
+    }
+  }
+  return rootId;
+}
+
+// GET /api/portal/folders — the client's full folder tree + per-folder document counts.
+app.get('/api/portal/folders', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.json({ ok: true, folders: [] });
+    await ensureStandardFolders(clientId);
+    const fr = await pool.query(
+      `SELECT f.id, f.parent_id, f.name, f.year, f.is_system,
+              (SELECT COUNT(*)::int FROM documents d WHERE d.folder_id=f.id) AS doc_count
+       FROM doc_folders f WHERE f.client_id=$1 ORDER BY f.parent_id NULLS FIRST, f.is_system DESC, f.name`,
+      [clientId]);
+    res.json({ ok: true, folders: fr.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portal/folders { parentId, name } — client creates a sub-folder (within limits).
+app.post('/api/portal/folders', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.status(404).json({ error: 'no client profile' });
+    const name = String(req.body.name || '').trim().slice(0, 60);
+    const parentId = req.body.parentId ? Number(req.body.parentId) : null;
+    if (!name) return res.status(400).json({ error: 'folder name required' });
+    if (!parentId) return res.status(400).json({ error: 'a parent folder is required' });
+
+    // Parent must belong to this client.
+    const pr = await pool.query('SELECT id, year FROM doc_folders WHERE id=$1 AND client_id=$2', [parentId, clientId]);
+    if (!pr.rows.length) return res.status(404).json({ error: 'parent folder not found' });
+
+    // Enforce total-folder and per-parent limits.
+    const tot = await pool.query('SELECT COUNT(*)::int AS n FROM doc_folders WHERE client_id=$1 AND is_system=false', [clientId]);
+    if (tot.rows[0].n >= MAX_CLIENT_FOLDERS) return res.status(400).json({ error: 'folder limit reached' });
+    const kids = await pool.query('SELECT COUNT(*)::int AS n FROM doc_folders WHERE parent_id=$1', [parentId]);
+    if (kids.rows[0].n >= MAX_FOLDER_CHILDREN) return res.status(400).json({ error: 'this folder has too many sub-folders' });
+
+    // Enforce maximum depth by walking up the parent chain.
+    let depth = 1, cursor = parentId;
+    while (cursor) {
+      const up = await pool.query('SELECT parent_id FROM doc_folders WHERE id=$1', [cursor]);
+      if (!up.rows.length) break;
+      depth++; cursor = up.rows[0].parent_id;
+      if (depth > MAX_FOLDER_DEPTH) return res.status(400).json({ error: 'maximum folder depth reached' });
+    }
+
+    // No duplicate name under the same parent.
+    const dup = await pool.query('SELECT id FROM doc_folders WHERE parent_id=$1 AND lower(name)=lower($2)', [parentId, name]);
+    if (dup.rows.length) return res.status(400).json({ error: 'a folder with that name already exists here' });
+
+    const ins = await pool.query(
+      'INSERT INTO doc_folders (client_id, parent_id, name, year, is_system, created_by) VALUES ($1,$2,$3,$4,false,$5) RETURNING id',
+      [clientId, parentId, name, pr.rows[0].year, req.user.email]);
+    await audit(pool, req.user.email, 'folder.create', 'folder', String(ins.rows[0].id), { name, parentId });
+    res.json({ ok: true, id: ins.rows[0].id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/portal/folders/:id — remove a client-created (non-system) folder.
+// Documents inside are kept (folder_id set to NULL via FK), never deleted.
+app.delete('/api/portal/folders/:id', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.status(404).json({ error: 'no client profile' });
+    const fr = await pool.query('SELECT id, is_system FROM doc_folders WHERE id=$1 AND client_id=$2', [req.params.id, clientId]);
+    if (!fr.rows.length) return res.status(404).json({ error: 'folder not found' });
+    if (fr.rows[0].is_system) return res.status(403).json({ error: 'standard folders cannot be deleted' });
+    await pool.query('DELETE FROM doc_folders WHERE id=$1', [req.params.id]);
+    await audit(pool, req.user.email, 'folder.delete', 'folder', String(req.params.id), {});
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/portal/folders/:id/documents — documents filed in one folder (client-owned).
+app.get('/api/portal/folders/:id/documents', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.status(404).json({ error: 'no client profile' });
+    const fr = await pool.query('SELECT id FROM doc_folders WHERE id=$1 AND client_id=$2', [req.params.id, clientId]);
+    if (!fr.rows.length) return res.status(404).json({ error: 'folder not found' });
+    const docs = await pool.query(
+      'SELECT id, category, filename, created_at, status FROM documents WHERE folder_id=$1 AND client_id=$2 ORDER BY created_at DESC',
+      [req.params.id, clientId]);
+    res.json({ ok: true, documents: docs.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portal/folders/:id/upload — free-form upload straight into a folder
+// (not tied to a job's document request). Uses the same disk storage + limits.
+app.post('/api/portal/folders/:id/upload', requireAuth, requireRole('client'), upload.single('file'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.status(404).json({ error: 'no client profile' });
+    if (!req.file) return res.status(400).json({ error: 'file required' });
+    const fr = await pool.query('SELECT id FROM doc_folders WHERE id=$1 AND client_id=$2', [req.params.id, clientId]);
+    if (!fr.rows.length) return res.status(404).json({ error: 'folder not found' });
+    const category = String(req.body.category || 'Other').trim();
+    const ins = await pool.query(
+      `INSERT INTO documents (job_id, client_id, entity_id, category, filename, stored_path, mime, size, uploaded_by, folder_id)
+       VALUES (NULL,$1,NULL,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [clientId, category, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.email, req.params.id]);
+    await audit(pool, req.user.email, 'document.upload_folder', 'folder', String(req.params.id), { filename: req.file.originalname });
+    res.json({ ok: true, id: ins.rows[0].id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
 // ================= GOOGLE DRIVE (firm-wide OAuth) =================
 // The firm connects ONE Google account once; refresh token is stored server-side.
 // Connect/disconnect/status are administrator-only. The OAuth callback is a
@@ -1437,9 +1826,15 @@ app.post('/api/google/disconnect', requireAuth, requireRole('administrator'), as
 app.post('/api/documents/upload', requireAuth, upload.single('file'), async (req, res) => {
   const jobId = String(req.body.jobId || '').trim();
   const category = String(req.body.category || 'Other').trim();
+  // Optional: the specific outstanding request this upload fulfils (from the
+  // "Documents we need from you" list). If omitted we try to match by category.
+  const docRequestId = req.body.docRequestId ? Number(req.body.docRequestId) : null;
   if (!req.file) return res.status(400).json({ error: 'file required' });
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
   const client = await pool.connect();
+  // Captured inside the transaction, used for notifications after COMMIT.
+  let autoAdvanced = false;      // did the workflow move to "Documents Received"?
+  let fulfilledDesc = null;      // description of the request this upload satisfied
   try {
     await client.query('BEGIN');
     const jr = await client.query('SELECT j.*, c.email AS client_email FROM jobs j JOIN clients c ON c.id=j.client_id WHERE j.id=$1', [jobId]);
@@ -1449,12 +1844,49 @@ app.post('/api/documents/upload', requireAuth, upload.single('file'), async (req
     if (req.user.role === 'client' && normAccount(job.client_email) !== normAccount(req.user.email)) {
       await client.query('ROLLBACK'); return res.status(403).json({ error: 'not your job' });
     }
+    // (1) confirm receipt + (2) timestamp (created_at default) + (3) identify client
+    //     (job JOIN clients) + (4) link to job (job_id).
     const ins = await client.query(
       `INSERT INTO documents (job_id, client_id, entity_id, category, filename, stored_path, mime, size, uploaded_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
       [jobId, job.client_id, job.entity_id, category, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.email]);
     const docId = ins.rows[0].id;
     await audit(client, req.user.email, 'document.upload', 'job', jobId, { category, filename: req.file.originalname });
+
+    // (5) update checklist: mark the matching outstanding document request as received.
+    //     Prefer the explicit request id; otherwise fall back to the oldest pending
+    //     request in the same category. This is the "auto-acknowledgement" that
+    //     removes the manual staff step.
+    let fr = { rows: [] };
+    if (docRequestId) {
+      fr = await client.query(
+        "UPDATE doc_requests SET status='received', received_at=now() WHERE id=$1 AND job_id=$2 AND status='pending' RETURNING description",
+        [docRequestId, jobId]);
+    }
+    if (!fr.rows.length && category) {
+      fr = await client.query(
+        "UPDATE doc_requests SET status='received', received_at=now() WHERE id=(SELECT id FROM doc_requests WHERE job_id=$1 AND status='pending' AND category=$2 ORDER BY created_at LIMIT 1) RETURNING description",
+        [jobId, category]);
+    }
+    if (fr.rows.length) fulfilledDesc = fr.rows[0].description;
+
+    // (7) update workflow: if nothing is outstanding any more, clear the action flag
+    //     and — if we were still collecting documents — advance to "Documents Received".
+    const rem = await client.query("SELECT COUNT(*)::int AS n FROM doc_requests WHERE job_id=$1 AND status='pending'", [jobId]);
+    if (rem.rows[0].n === 0) {
+      await client.query('UPDATE jobs SET action_required=false, updated_at=now() WHERE id=$1', [jobId]);
+      if (job.stage === '01_created' || job.stage === '02_waiting_docs') {
+        await changeStage(client, job, '03_docs_received', 'system', 'All requested documents received');
+        autoAdvanced = true;
+      }
+    }
+
+    // Automation event: a client uploaded a document against this job (best-effort, in-txn).
+    if (req.user.role === 'client') {
+      await runAutomations(client, 'document_uploaded',
+        { job: job, document: { id: docId, category: category, filename: req.file.originalname } }, req.user.email);
+    }
+
     await client.query('COMMIT');
 
     // Back up to Google Drive (no-op if not connected). Group by client, with the
@@ -1469,25 +1901,35 @@ app.post('/api/documents/upload', requireAuth, upload.single('file'), async (req
       subfolder: driveSubfolder,
     });
 
-    // If the CLIENT uploaded, let the assigned accountant know so they can action it (background).
+    // (6) notify staff: if the CLIENT uploaded, let the assigned accountant know (background).
     if (req.user.role === 'client' && job.accountant_email) {
       notifyBg({
         jobId: job.id, toEmail: job.accountant_email,
         rawSubject: 'Client uploaded a document: ' + job.id,
-        rawBody: 'The client uploaded "' + req.file.originalname + '" (' + category + ') to job ' + job.id + '.\n\nLog in to review it.',
+        rawBody: 'The client uploaded "' + req.file.originalname + '" (' + category + ') to job ' + job.id + '.'
+          + (fulfilledDesc ? '\n\nThis fulfils the request: "' + fulfilledDesc + '".' : '')
+          + (autoAdvanced ? '\n\nAll requested documents are now in — the job has moved to "Documents Received".' : '')
+          + '\n\nLog in to review it.',
       });
     }
 
-    // Acknowledge back to the CLIENT so they know we received it (background).
+    // (8) log to communication history + auto-acknowledge the CLIENT (background).
     if (req.user.role === 'client' && job.client_email) {
       notifyBg({
         jobId: job.id, toEmail: job.client_email,
         rawSubject: 'Document received — ' + job.id,
         rawBody: 'Thank you. Your document "' + req.file.originalname + '" has been received for job ' + job.id + '.'
-          + '\n\nOur team will review it shortly. You can track progress any time by logging in to your portal.',
+          + (fulfilledDesc ? '\n\nThis covers the item we requested: "' + fulfilledDesc + '".' : '')
+          + (autoAdvanced
+              ? '\n\nWe now have everything we asked for and have started work on your job.'
+              : '\n\nOur team will review it shortly. You can track progress any time by logging in to your portal.'),
       });
     }
-    res.json({ ok: true });
+    // If we auto-advanced the workflow, fire the stage's standard client notification too.
+    if (autoAdvanced) {
+      await maybeNotifyStage(Object.assign({}, job, { stage: '03_docs_received' }));
+    }
+    res.json({ ok: true, autoAdvanced: autoAdvanced, fulfilled: !!fulfilledDesc });
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
   finally { client.release(); }
 });
@@ -1495,11 +1937,24 @@ app.post('/api/documents/upload', requireAuth, upload.single('file'), async (req
 // GET /api/documents/:id/download
 app.get('/api/documents/:id/download', requireAuth, async (req, res) => {
   try {
-    const r = await pool.query('SELECT d.*, c.email AS client_email FROM documents d JOIN clients c ON c.id=d.client_id WHERE d.id=$1', [req.params.id]);
+    const r = await pool.query('SELECT d.*, c.email AS client_email, j.accountant_email FROM documents d JOIN clients c ON c.id=d.client_id LEFT JOIN jobs j ON j.id=d.job_id WHERE d.id=$1', [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'document not found' });
     const doc = r.rows[0];
-    if (req.user.role === 'client' && normAccount(doc.client_email) !== normAccount(req.user.email)) {
-      return res.status(403).json({ error: 'not your document' });
+    if (req.user.role === 'client') {
+      // Must be the client's own job/profile...
+      if (normAccount(doc.client_email) !== normAccount(req.user.email)) {
+        return res.status(403).json({ error: 'not your document' });
+      }
+      // ...and either their OWN upload or a firm document shared with them.
+      const ownUpload = normAccount(doc.uploaded_by) === normAccount(req.user.email);
+      if (!ownUpload && doc.client_visible !== true) {
+        return res.status(403).json({ error: 'this document is not available to you' });
+      }
+    } else if (req.user.role === 'accountant') {
+      // Accountants may only download documents on their own jobs (matches other doc routes).
+      if (normAccount(doc.accountant_email) !== normAccount(req.user.email)) {
+        return res.status(403).json({ error: 'You can only access documents on your own jobs' });
+      }
     }
     const p = path.join(UPLOAD_DIR, doc.stored_path);
     if (!fs.existsSync(p)) return res.status(404).json({ error: 'file missing on disk' });
@@ -1743,6 +2198,336 @@ app.get('/api/admin/audit', requireAuth, requireRole('administrator', 'superviso
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Client-Home announcement banner (admin-editable). Stored as JSON in app_settings.
+app.get('/api/admin/announcement', requireAuth, requireRole('administrator'), async (req, res) => {
+  try {
+    const r = await pool.query("SELECT value FROM app_settings WHERE key='portal_announcement'");
+    let a = { enabled: false, title: '', body: '' };
+    if (r.rows.length && r.rows[0].value) { try { a = Object.assign(a, JSON.parse(r.rows[0].value)); } catch (e) { /* ignore */ } }
+    res.json({ ok: true, announcement: a });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/admin/announcement', requireAuth, requireRole('administrator'), async (req, res) => {
+  const a = {
+    enabled: !!req.body.enabled,
+    title: String(req.body.title || '').trim().slice(0, 200),
+    body: String(req.body.body || '').trim().slice(0, 2000),
+  };
+  try {
+    await pool.query(
+      `INSERT INTO app_settings (key, value, updated_by, updated_at)
+       VALUES ('portal_announcement', $1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`,
+      [JSON.stringify(a), req.user.email]);
+    await audit(pool, req.user.email, 'announcement.update', 'app_settings', 'portal_announcement', { enabled: a.enabled });
+    res.json({ ok: true, announcement: a });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================= ADMIN AUTOMATIONS (per-stage rules + SLA limits) =================
+app.get('/api/admin/automations', requireAuth, requireRole('administrator'), async (req, res) => {
+  try {
+    const [rules, limits] = await Promise.all([
+      pool.query('SELECT * FROM stage_automations ORDER BY stage, sort_order, id'),
+      pool.query('SELECT * FROM stage_limits'),
+    ]);
+    res.json({ ok: true, rules: rules.rows, limits: limits.rows, stages: wf.STAGES, stageMap: wf.STAGE_MAP, triggers: AUTOMATION_TRIGGERS });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+const AUTOMATION_ACTIONS = ['notify_client', 'set_action_required', 'clear_action_required', 'add_note', 'notify_staff'];
+// Event triggers an admin rule can listen on. `key` describes the optional narrowing field.
+const AUTOMATION_TRIGGERS = [
+  { type: 'stage_enter', label: 'Job enters a stage', key: 'stage' },
+  { type: 'job_created', label: 'Job is created', key: 'job_type' },
+  { type: 'job_assigned', label: 'Job is assigned', key: null },
+  { type: 'client_created', label: 'Client is created', key: null },
+  { type: 'document_uploaded', label: 'Client uploads a document', key: null },
+];
+const AUTOMATION_TRIGGER_TYPES = AUTOMATION_TRIGGERS.map((t) => t.type);
+// Actions that need a job in context — cannot run on client_created.
+const JOB_ONLY_ACTIONS = ['set_action_required', 'clear_action_required', 'add_note'];
+
+app.post('/api/admin/automations', requireAuth, requireRole('administrator'), async (req, res) => {
+  const triggerType = String(req.body.triggerType || 'stage_enter');
+  const action = String(req.body.action || '');
+  if (AUTOMATION_TRIGGER_TYPES.indexOf(triggerType) === -1) return res.status(400).json({ error: 'invalid trigger' });
+  if (AUTOMATION_ACTIONS.indexOf(action) === -1) return res.status(400).json({ error: 'invalid action' });
+  // trigger_key: for stage_enter it must be a valid stage; for job_created it's an optional job_type; else ignored.
+  let triggerKey = null;
+  let stageCol = ''; // legacy `stage` column kept in sync for back-compat
+  if (triggerType === 'stage_enter') {
+    const stage = String(req.body.triggerKey || req.body.stage || '');
+    if (!wf.isValidStage(stage)) return res.status(400).json({ error: 'invalid stage' });
+    triggerKey = stage; stageCol = stage;
+  } else if (triggerType === 'job_created') {
+    triggerKey = String(req.body.triggerKey || '').trim() || null; // optional job_type filter
+  }
+  // Guard: job-only actions make no sense on the client_created event.
+  if (triggerType === 'client_created' && JOB_ONLY_ACTIONS.indexOf(action) !== -1) {
+    return res.status(400).json({ error: 'that action needs a job; it cannot run on client-created' });
+  }
+  const config = (req.body.config && typeof req.body.config === 'object') ? req.body.config : {};
+  try {
+    const r = await pool.query(
+      `INSERT INTO stage_automations (stage, action, config, enabled, sort_order, created_by, trigger_type, trigger_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [stageCol, action, config, req.body.enabled !== false, Number(req.body.sortOrder) || 0, req.user.email, triggerType, triggerKey]);
+    await audit(pool, req.user.email, 'automation.create', 'stage_automation', String(r.rows[0].id), { triggerType, triggerKey, action });
+    res.json({ ok: true, id: r.rows[0].id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/admin/automations/:id', requireAuth, requireRole('administrator'), async (req, res) => {
+  try {
+    const cur = await pool.query('SELECT * FROM stage_automations WHERE id=$1', [req.params.id]);
+    if (!cur.rows.length) return res.status(404).json({ error: 'rule not found' });
+    const enabled = typeof req.body.enabled === 'boolean' ? req.body.enabled : cur.rows[0].enabled;
+    const config = (req.body.config && typeof req.body.config === 'object') ? req.body.config : cur.rows[0].config;
+    await pool.query('UPDATE stage_automations SET enabled=$1, config=$2 WHERE id=$3', [enabled, config, req.params.id]);
+    await audit(pool, req.user.email, 'automation.update', 'stage_automation', String(req.params.id), { enabled });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/admin/automations/:id', requireAuth, requireRole('administrator'), async (req, res) => {
+  try {
+    await pool.query('DELETE FROM stage_automations WHERE id=$1', [req.params.id]);
+    await audit(pool, req.user.email, 'automation.delete', 'stage_automation', String(req.params.id), {});
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/admin/stage-limits/:stage', requireAuth, requireRole('administrator'), async (req, res) => {
+  const stage = String(req.params.stage);
+  if (!wf.isValidStage(stage)) return res.status(400).json({ error: 'invalid stage' });
+  const days = Math.max(0, Number(req.body.limitDays) || 0);
+  try {
+    await pool.query(
+      `INSERT INTO stage_limits (stage, limit_days, updated_by, updated_at) VALUES ($1,$2,$3,now())
+       ON CONFLICT (stage) DO UPDATE SET limit_days=EXCLUDED.limit_days, updated_by=EXCLUDED.updated_by, updated_at=now()`,
+      [stage, days, req.user.email]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================= STAFF: mentionable colleagues (for @mention autocomplete) =================
+app.get('/api/staff/mentionable', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    const r = await pool.query(
+      "SELECT email, name, role FROM users WHERE role IN ('administrator','supervisor','accountant','reception') AND active=true ORDER BY name NULLS LAST, email");
+    res.json({ ok: true, staff: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================= STAFF: pipeline board (jobs grouped by stage) =================
+app.get('/api/pipeline', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    const params = [];
+    let where = '';
+    // Accountants only see their own jobs.
+    if (req.user.role === 'accountant') { params.push(normAccount(req.user.email)); where = 'WHERE lower(j.accountant_email)=$1'; }
+    const jr = await pool.query(
+      `SELECT j.id, j.stage, j.job_type, j.financial_year, j.priority, j.due_date, j.on_hold, j.action_required,
+              j.stage_since, c.name AS client_name, e.entity_name,
+              ua.name AS accountant_name
+       FROM jobs j JOIN clients c ON c.id=j.client_id
+       LEFT JOIN entities e ON e.id=j.entity_id
+       LEFT JOIN users ua ON lower(ua.email)=lower(j.accountant_email)
+       ${where} ORDER BY j.priority DESC, j.due_date NULLS LAST, j.stage_since`, params);
+    const limits = await pool.query('SELECT stage, limit_days FROM stage_limits');
+    const limitMap = {}; limits.rows.forEach((l) => { limitMap[l.stage] = l.limit_days; });
+    const now = Date.now();
+    const jobs = jr.rows.map((j) => {
+      let overdue = false;
+      const lim = limitMap[j.stage] || 0;
+      if (lim > 0 && j.stage_since) {
+        const days = (now - new Date(j.stage_since).getTime()) / 86400000;
+        overdue = days > lim;
+      }
+      return Object.assign(j, { overdue });
+    });
+    res.json({ ok: true, jobs, stages: wf.STAGES, stageMap: wf.STAGE_MAP, limits: limitMap });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================= STAFF: insights dashboard =================
+app.get('/api/insights/summary', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    const scoped = req.user.role === 'accountant';
+    // ---- read + validate filters ----
+    const fy = String(req.query.fy || '').trim();
+    const type = String(req.query.type || '').trim();
+    const priority = String(req.query.priority || '').trim();
+    const staff = String(req.query.staff || '').trim();
+    let months = parseInt(req.query.months, 10);
+    if (![3, 6, 12].includes(months)) months = 6;
+
+    // Filter definitions shared by every jobs-based query (same param order everywhere).
+    const filters = [];
+    if (scoped) filters.push({ mode: 'acct', val: normAccount(req.user.email) });
+    else if (staff) filters.push({ mode: 'acct', val: staff.toLowerCase() });
+    if (fy) filters.push({ mode: 'plain', col: 'financial_year', val: fy });
+    if (type) filters.push({ mode: 'type', val: type });
+    if (priority) filters.push({ mode: 'prio', val: priority });
+    const params = filters.map((f) => f.val);
+    const hasFilter = filters.length > 0;
+    function cond(f, pre, idx) {
+      const c = pre ? pre + '.' : '';
+      if (f.mode === 'acct') return `lower(${c}accountant_email)=$${idx}`;
+      if (f.mode === 'type') return `COALESCE(NULLIF(${c}job_type,''),'Unspecified')=$${idx}`;
+      if (f.mode === 'prio') return `COALESCE(NULLIF(${c}priority,''),'normal')=$${idx}`;
+      return `${c}${f.col}=$${idx}`;
+    }
+    function whereClause(pre, extras) {
+      const parts = filters.map((f, i) => cond(f, pre, i + 1));
+      (extras || []).forEach((e) => parts.push(e));
+      return parts.length ? 'WHERE ' + parts.join(' AND ') : '';
+    }
+    const ACTIVE = "stage <> '09_completed'";
+
+    // Jobs per stage
+    const byStage = await pool.query(`SELECT stage, COUNT(*)::int AS n FROM jobs ${whereClause('', [])} GROUP BY stage`, params);
+    // Active jobs by type
+    const byType = await pool.query(
+      `SELECT COALESCE(NULLIF(job_type,''),'Unspecified') AS type, COUNT(*)::int AS n
+         FROM jobs ${whereClause('', [ACTIVE])} GROUP BY 1 ORDER BY n DESC`, params);
+    // Active jobs by priority
+    const byPriority = await pool.query(
+      `SELECT COALESCE(NULLIF(priority,''),'normal') AS priority, COUNT(*)::int AS n
+         FROM jobs ${whereClause('', [ACTIVE])} GROUP BY 1`, params);
+    // Overdue by due_date (active jobs only)
+    const overdue = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ['due_date IS NOT NULL', 'due_date < CURRENT_DATE', ACTIVE])}`, params);
+    // Active vs completed
+    const active = await pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', [ACTIVE])}`, params);
+    const completed = await pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["stage = '09_completed'"])}`, params);
+    // On-hold & high-priority active jobs
+    const onHold = await pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ['on_hold = true', ACTIVE])}`, params);
+    const highPriority = await pool.query(`SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["priority = 'high'", ACTIVE])}`, params);
+    // Throughput: completions per month (last N months) from status history
+    const throughput = await pool.query(
+      `SELECT to_char(date_trunc('month', h.created_at),'YYYY-MM') AS month, COUNT(*)::int AS n
+         FROM job_status_history h JOIN jobs j ON j.id = h.job_id
+         ${whereClause('j', ["h.to_stage='09_completed'", `h.created_at >= now() - interval '${months} months'`])}
+         GROUP BY 1 ORDER BY 1`, params);
+    // Intake: new jobs created per month (last N months)
+    const intake = await pool.query(
+      `SELECT to_char(date_trunc('month', created_at),'YYYY-MM') AS month, COUNT(*)::int AS n
+         FROM jobs ${whereClause('', [`created_at >= now() - interval '${months} months'`])} GROUP BY 1 ORDER BY 1`, params);
+    // Per-staff workload (active jobs) — firm-wide only
+    let workload = { rows: [] };
+    if (!scoped) {
+      workload = await pool.query(
+        `SELECT COALESCE(u.name, j.accountant_email, 'Unassigned') AS staff, COUNT(*)::int AS n
+           FROM jobs j LEFT JOIN users u ON lower(u.email)=lower(j.accountant_email)
+           ${whereClause('j', ['j.' + ACTIVE.slice(0)])} GROUP BY 1 ORDER BY n DESC`, params);
+    }
+    // Documents by review status
+    const docsByStatus = await pool.query(
+      `SELECT d.status, COUNT(*)::int AS n FROM documents d JOIN jobs j ON j.id=d.job_id
+         ${whereClause('j', [])} GROUP BY 1 ORDER BY n DESC`, params);
+    // Documents awaiting review (status='received')
+    const docsToReview = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM documents d JOIN jobs j ON j.id=d.job_id ${whereClause('j', ["d.status='received'"])}`, params);
+    // Outstanding document requests
+    const outstandingDocs = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM doc_requests dr JOIN jobs j ON j.id=dr.job_id ${whereClause('j', ["dr.status='pending'"])}`, params);
+    // Clients served (all clients when firm-wide + no filter, else distinct from filtered jobs)
+    const clientsCount = (!scoped && !hasFilter)
+      ? await pool.query('SELECT COUNT(*)::int AS n FROM clients')
+      : await pool.query(`SELECT COUNT(DISTINCT client_id)::int AS n FROM jobs ${whereClause('', [])}`, params);
+    // Upcoming appointments (booked, future)
+    const upcomingAppts = (!scoped && !hasFilter)
+      ? await pool.query("SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now()")
+      : await pool.query(
+          `SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now()
+             AND client_id IN (SELECT DISTINCT client_id FROM jobs ${whereClause('', [])})`, params);
+
+    // Active jobs by financial year (grouping for custom widgets)
+    const byYear = await pool.query(
+      `SELECT COALESCE(NULLIF(financial_year,''),'Unspecified') AS year, COUNT(*)::int AS n
+         FROM jobs ${whereClause('', [ACTIVE])} GROUP BY 1 ORDER BY 1 DESC`, params);
+    // New jobs created in the last 7 days
+    const newThisWeek = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM jobs ${whereClause('', ["created_at >= now() - interval '7 days'"])}`, params);
+    // Completed in the last 7 days (from status history)
+    const completedThisWeek = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM job_status_history h JOIN jobs j ON j.id = h.job_id
+         ${whereClause('j', ["h.to_stage='09_completed'", "h.created_at >= now() - interval '7 days'"])}`, params);
+    // Booked appointments in the next 7 days
+    const apptsThisWeek = (!scoped && !hasFilter)
+      ? await pool.query("SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now() AND start_time < now() + interval '7 days'")
+      : await pool.query(
+          `SELECT COUNT(*)::int AS n FROM appointments WHERE status='booked' AND start_time >= now() AND start_time < now() + interval '7 days'
+             AND client_id IN (SELECT DISTINCT client_id FROM jobs ${whereClause('', [])})`, params);
+    // Average days jobs have sat in their current stage (active only)
+    const avgStageAge = await pool.query(
+      `SELECT COALESCE(ROUND(AVG(EXTRACT(EPOCH FROM (now() - stage_since)) / 86400))::int, 0) AS n
+         FROM jobs ${whereClause('', [ACTIVE])}`, params);
+    const activeN = active.rows[0].n, completedN = completed.rows[0].n;
+    const completionRate = (activeN + completedN) > 0 ? Math.round((completedN / (activeN + completedN)) * 100) : 0;
+
+    // ---- filter option lists ----
+    const optParams = scoped ? [normAccount(req.user.email)] : [];
+    const optScope = scoped ? 'AND lower(accountant_email)=$1' : '';
+    const yearsQ = await pool.query(
+      `SELECT DISTINCT financial_year AS v FROM jobs WHERE financial_year IS NOT NULL AND financial_year<>'' ${optScope} ORDER BY 1 DESC`, optParams);
+    const typesQ = await pool.query(
+      `SELECT DISTINCT COALESCE(NULLIF(job_type,''),'Unspecified') AS v FROM jobs WHERE 1=1 ${optScope} ORDER BY 1`, optParams);
+    let staffOpts = [];
+    if (!scoped) {
+      const sq = await pool.query(
+        `SELECT lower(j.accountant_email) AS email, COALESCE(u.name, j.accountant_email) AS name
+           FROM jobs j LEFT JOIN users u ON lower(u.email)=lower(j.accountant_email)
+          WHERE j.accountant_email IS NOT NULL AND j.accountant_email<>'' GROUP BY 1,2 ORDER BY 2`);
+      staffOpts = sq.rows;
+    }
+
+    res.json({
+      ok: true,
+      scoped,
+      filters: { fy, type, priority, staff, months },
+      filterOptions: {
+        years: yearsQ.rows.map((r) => r.v),
+        types: typesQ.rows.map((r) => r.v),
+        priorities: ['high', 'normal', 'low'],
+        staff: staffOpts,
+      },
+      byStage: byStage.rows,
+      byType: byType.rows,
+      byPriority: byPriority.rows,
+      byYear: byYear.rows,
+      overdue: overdue.rows[0].n,
+      active: active.rows[0].n,
+      completed: completed.rows[0].n,
+      onHold: onHold.rows[0].n,
+      highPriority: highPriority.rows[0].n,
+      newThisWeek: newThisWeek.rows[0].n,
+      completedThisWeek: completedThisWeek.rows[0].n,
+      apptsThisWeek: apptsThisWeek.rows[0].n,
+      avgStageAge: avgStageAge.rows[0].n,
+      completionRate: completionRate,
+      throughput: throughput.rows,
+      intake: intake.rows,
+      workload: workload.rows,
+      docsByStatus: docsByStatus.rows,
+      docsToReview: docsToReview.rows[0].n,
+      outstandingDocs: outstandingDocs.rows[0].n,
+      clients: clientsCount.rows[0].n,
+      upcomingAppts: upcomingAppts.rows[0].n,
+      groupings: [
+        { key: 'stage', label: 'Stage' },
+        { key: 'type', label: 'Type' },
+        { key: 'priority', label: 'Priority' },
+        { key: 'year', label: 'Financial year' },
+      ].concat(scoped ? [] : [{ key: 'staff', label: 'Staff' }]),
+      stageMap: wf.STAGE_MAP,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ================= CLIENT PORTAL =================
 // Builds a client-facing "next action" message that matches the job's real situation.
 // - If documents are still outstanding -> ask to upload them.
@@ -1767,14 +2552,20 @@ app.get('/api/portal/jobs', requireAuth, requireRole('client'), async (req, res)
        WHERE j.client_id = ANY($1) ORDER BY j.updated_at DESC`, [clientIds]);
     const jobs = [];
     for (const j of jr.rows) {
-      const view = wf.clientView(j);
-      const rem = await pool.query("SELECT COUNT(*)::int AS n FROM doc_requests WHERE job_id=$1 AND status='pending'", [j.id]);
+      const rc = await pool.query(
+        "SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status <> 'pending')::int AS received FROM doc_requests WHERE job_id=$1",
+        [j.id]);
+      const requested = rc.rows[0].total;
+      const received = rc.rows[0].received;
+      const rem = requested - received;
+      const view = wf.clientView(j, { requested: requested, received: received });
       jobs.push({
         id: j.id, jobType: j.job_type, financialYear: j.financial_year, entityName: j.entity_name,
         clientStatus: view.clientStatus, clientMessage: view.clientMessage, progressPct: view.progressPct,
-        clientStep: view.clientStep, clientStepLabel: view.clientStepLabel, clientSteps: view.clientSteps,
-        lastUpdate: j.updated_at, outstanding: rem.rows[0].n,
-        nextAction: portalNextAction(j, view, rem.rows[0].n),
+        clientStep: view.clientStep, clientStepLabel: view.clientStepLabel, clientStepExplain: view.clientStepExplain,
+        clientSteps: view.clientSteps,
+        lastUpdate: j.updated_at, outstanding: rem,
+        nextAction: portalNextAction(j, view, rem),
       });
     }
     res.json({ ok: true, clientId, jobs });
@@ -1789,15 +2580,201 @@ app.get('/api/portal/jobs/:id', requireAuth, requireRole('client'), async (req, 
     const jr = await pool.query('SELECT * FROM jobs WHERE id=$1 AND client_id = ANY($2)', [req.params.id, clientIds]);
     if (!jr.rows.length) return res.status(404).json({ error: 'job not found' });
     const j = jr.rows[0];
-    const view = wf.clientView(j);
     const reqs = await pool.query("SELECT id, category, description, due_date, status FROM doc_requests WHERE job_id=$1 ORDER BY created_at DESC", [req.params.id]);
-    const docs = await pool.query('SELECT id, category, filename, uploaded_by, created_at, status, review_note FROM documents WHERE job_id=$1 ORDER BY created_at DESC', [req.params.id]);
+    // Only show documents the client is allowed to see: their OWN uploads, or firm
+    // documents a staff member has explicitly shared (client_visible=true). Internal
+    // working papers stay hidden. `sharedByFirm` lets the UI label firm deliverables.
+    const docs = await pool.query(
+      `SELECT id, category, filename, created_at, status, review_note,
+              (lower(uploaded_by) = $2) AS is_own_upload,
+              (client_visible AND lower(uploaded_by) <> $2) AS shared_by_firm
+         FROM documents
+        WHERE job_id=$1 AND (client_visible = true OR lower(uploaded_by) = $2)
+        ORDER BY created_at DESC`,
+      [req.params.id, normAccount(req.user.email)]);
+    const requested = reqs.rows.length;
+    const received = reqs.rows.filter((r) => r.status !== 'pending').length;
+    const view = wf.clientView(j, { requested: requested, received: received });
     res.json({ ok: true, job: {
       id: j.id, jobType: j.job_type, financialYear: j.financial_year,
       clientStatus: view.clientStatus, clientMessage: view.clientMessage, progressPct: view.progressPct, lastUpdate: j.updated_at,
-      clientStep: view.clientStep, clientStepLabel: view.clientStepLabel, clientSteps: view.clientSteps,
+      clientStep: view.clientStep, clientStepLabel: view.clientStepLabel, clientStepExplain: view.clientStepExplain, clientSteps: view.clientSteps,
       canSign: j.stage === '06_awaiting_signature' && !j.on_hold,
     }, docRequests: reqs.rows, documents: docs.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/portal/summary — everything the client Home dashboard needs in one call:
+// their name, an aggregated "Action Required" list, a brief of current work, the next
+// appointment placeholder (Setmore wired in a later stage), and recent messages.
+app.get('/api/portal/summary', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const cr = await pool.query('SELECT id, name FROM clients WHERE lower(email)=$1', [normAccount(req.user.email)]);
+    const clientName = (cr.rows[0] && cr.rows[0].name) || req.user.name || '';
+    if (!cr.rows.length) {
+      return res.json({ ok: true, clientName: clientName, actions: [], jobs: [], messages: [] });
+    }
+    const clientIds = cr.rows.map((r) => r.id);
+    const jr = await pool.query(
+      `SELECT j.id, j.job_type, j.financial_year, j.stage, j.on_hold, j.action_required, j.updated_at,
+              e.entity_name FROM jobs j LEFT JOIN entities e ON e.id=j.entity_id
+       WHERE j.client_id = ANY($1) ORDER BY j.updated_at DESC`, [clientIds]);
+
+    const jobs = [];
+    const completedJobs = [];
+    const actions = [];
+    for (const j of jr.rows) {
+      const rc = await pool.query(
+        "SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status <> 'pending')::int AS received FROM doc_requests WHERE job_id=$1",
+        [j.id]);
+      const requested = rc.rows[0].total;
+      const received = rc.rows[0].received;
+      const view = wf.clientView(j, { requested: requested, received: received });
+      const pend = await pool.query(
+        "SELECT description FROM doc_requests WHERE job_id=$1 AND status='pending' ORDER BY created_at", [j.id]);
+      const outstanding = pend.rows.length;
+      // Aggregate action items across all jobs for the Home "Action Required" widget.
+      pend.rows.forEach((p) => {
+        actions.push({ jobId: j.id, type: 'upload', label: 'Upload ' + p.description });
+      });
+      if (j.stage === '06_awaiting_signature' && !j.on_hold) {
+        actions.push({ jobId: j.id, type: 'sign', label: 'Sign ' + (j.job_type || 'your documents') });
+      }
+      // Only surface active (not completed) jobs as "current work".
+      if (j.stage !== '09_completed') {
+        jobs.push({
+          id: j.id, jobType: j.job_type, financialYear: j.financial_year, entityName: j.entity_name,
+          clientStatus: view.clientStatus, clientMessage: view.clientMessage, progressPct: view.progressPct,
+          clientStep: view.clientStep, clientStepLabel: view.clientStepLabel, clientStepExplain: view.clientStepExplain,
+          outstanding: outstanding, lastUpdate: j.updated_at,
+        });
+      } else if (completedJobs.length < 5) {
+        // Recently completed work — client-safe fields only (no staff data).
+        completedJobs.push({
+          id: j.id, jobType: j.job_type, financialYear: j.financial_year, entityName: j.entity_name,
+          completedAt: j.updated_at,
+        });
+      }
+    }
+
+    const msgs = await pool.query(
+      'SELECT id, job_id, subject, body, created_at, read_at FROM notifications WHERE lower(to_email)=$1 ORDER BY created_at DESC LIMIT 5',
+      [normAccount(req.user.email)]);
+
+    // Next upcoming appointment (booked, in the future) for the dashboard card.
+    // NOTE: staff_name here is the Setmore adviser the CLIENT chose when booking (a separate
+    // Setmore staff list) — it is NOT an internal app user / offshore accountant, so showing it
+    // is safe and is exactly what the brief asks ("see which adviser they are meeting").
+    const ap = await pool.query(
+      `SELECT service_name, staff_name, start_time FROM appointments
+        WHERE client_id = ANY($1) AND status='booked' AND start_time >= now()
+        ORDER BY start_time ASC LIMIT 1`, [clientIds]);
+
+    // Firm-wide announcement banner for the client Home (admin-editable via app_settings).
+    let announcement = null;
+    try {
+      const anr = await pool.query("SELECT value FROM app_settings WHERE key='portal_announcement'");
+      if (anr.rows.length && anr.rows[0].value) {
+        const a = JSON.parse(anr.rows[0].value);
+        if (a && a.enabled && (a.title || a.body)) announcement = { title: a.title || '', body: a.body || '' };
+      }
+    } catch (e) { /* ignore malformed announcement */ }
+
+    res.json({ ok: true, clientName: clientName, actions: actions, jobs: jobs,
+      completedJobs: completedJobs, messages: msgs.rows,
+      nextAppointment: ap.rows[0] || null, announcement: announcement });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Required client profile fields — used by the onboarding gate + completion check.
+function profileIsComplete(c) {
+  if (!c) return false;
+  var pref = String(c.preferred_contact || '').toLowerCase();
+  return !!(String(c.name || '').trim()
+    && c.dob
+    && String(c.mobile || '').trim()
+    && String(c.address || '').trim()
+    && ['email', 'mobile', 'phone'].indexOf(pref) !== -1);
+}
+
+function isoDob(dob) {
+  if (!dob) return '';
+  try { return new Date(dob).toISOString().slice(0, 10); } catch (e) { return ''; }
+}
+
+// GET /api/portal/profile — the client's basic contact details (no sensitive tax data).
+app.get('/api/portal/profile', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, name, email, phone, address, mobile, preferred_contact, dob FROM clients WHERE lower(email)=$1 ORDER BY id LIMIT 1',
+      [normAccount(req.user.email)]);
+    const c = r.rows[0] || { name: req.user.name || '', email: req.user.email };
+    res.json({ ok: true, profile: {
+      name: c.name || '', email: c.email || req.user.email, phone: c.phone || '',
+      address: c.address || '', mobile: c.mobile || '', preferredContact: c.preferred_contact || 'email',
+      dob: isoDob(c.dob),
+    } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/portal/status — onboarding gate flags for the signed-in client.
+app.get('/api/portal/status', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const email = normAccount(req.user.email);
+    const ur = await pool.query('SELECT mfa_enabled FROM users WHERE email=$1', [email]);
+    const mfaEnabled = !!(ur.rows[0] && ur.rows[0].mfa_enabled);
+    const cr = await pool.query(
+      'SELECT name, address, mobile, preferred_contact, dob FROM clients WHERE lower(email)=$1 ORDER BY id LIMIT 1',
+      [email]);
+    res.json({ ok: true, mfaEnabled, profileComplete: profileIsComplete(cr.rows[0]) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portal/profile/complete — mandatory onboarding: all fields required.
+app.post('/api/portal/profile/complete', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    const dob = String(req.body.dob || '').trim();
+    const mobile = String(req.body.mobile || '').trim();
+    const address = String(req.body.address || '').trim();
+    const phone = String(req.body.phone || '').trim();
+    let pref = String(req.body.preferredContact || '').trim().toLowerCase();
+
+    if (!name) return res.status(400).json({ error: 'Please enter your full name.' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) return res.status(400).json({ error: 'Please enter a valid date of birth.' });
+    if (!mobile) return res.status(400).json({ error: 'Please enter your mobile number.' });
+    if (!address) return res.status(400).json({ error: 'Please enter your residential address.' });
+    if (['email', 'mobile', 'phone'].indexOf(pref) === -1) return res.status(400).json({ error: 'Please choose a preferred contact method.' });
+
+    const id = await ensureClientForUser(req.user.email, name);
+    if (!id) return res.status(500).json({ error: 'Could not create your profile. Please try again.' });
+    await pool.query(
+      'UPDATE clients SET name=$1, dob=$2, mobile=$3, address=$4, phone=$5, preferred_contact=$6 WHERE id=$7',
+      [name, dob, mobile, address, phone || null, pref, id]);
+    await audit(pool, req.user.email, 'client.profile_complete', 'client', id, { by: 'client' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portal/profile — client updates their own basic contact details only.
+app.post('/api/portal/profile', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    const address = String(req.body.address || '').trim();
+    const mobile = String(req.body.mobile || '').trim();
+    const phone = String(req.body.phone || '').trim();
+    const dob = String(req.body.dob || '').trim();
+    let pref = String(req.body.preferredContact || 'email').trim().toLowerCase();
+    if (['email', 'mobile', 'phone'].indexOf(pref) === -1) pref = 'email';
+    // Upsert: create the clients row if it does not exist yet (self sign-up / social login).
+    const id = await ensureClientForUser(req.user.email, name);
+    if (!id) return res.status(500).json({ error: 'Could not save your profile. Please try again.' });
+    const dobVal = /^\d{4}-\d{2}-\d{2}$/.test(dob) ? dob : null;
+    await pool.query(
+      'UPDATE clients SET name=COALESCE(NULLIF($1,\'\'), name), address=$2, mobile=$3, phone=$4, preferred_contact=$5, dob=COALESCE($6, dob) WHERE id=$7',
+      [name, address || null, mobile || null, phone || null, pref, dobVal, id]);
+    await audit(pool, req.user.email, 'client.profile_update', 'client', id, { by: 'client' });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1834,15 +2811,350 @@ app.post('/api/portal/jobs/:id/sign', requireAuth, requireRole('client'), async 
     const job = jr.rows[0];
     if (job.stage !== '06_awaiting_signature') { await client.query('ROLLBACK'); return res.status(400).json({ error: 'this job is not awaiting your signature' }); }
     if (job.on_hold) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'this job is on hold' }); }
-    const signerName = String((req.body && req.body.name) || '').trim() || req.user.email;
-    await client.query('UPDATE jobs SET signed_by=$1, signed_at=now() WHERE id=$2', [signerName, job.id]);
+    const signerName = String((req.body && req.body.name) || '').trim();
+    if (!signerName) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Please type your full name to sign' }); }
+    if (!(req.body && req.body.consent === true)) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Please tick the confirmation box to authorise lodgement' }); }
+    // Capture a lightweight e-signature audit trail (IP + user agent + timestamp).
+    const signIp = (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+    const signUa = String(req.headers['user-agent'] || '').slice(0, 400);
+    await client.query('UPDATE jobs SET signed_by=$1, signed_at=now(), signed_ip=$2, signed_user_agent=$3 WHERE id=$4', [signerName, signIp, signUa, job.id]);
     await changeStage(client, job, '07_ready_lodgement', req.user.email, 'Signed by client: ' + signerName);
-    await audit(client, req.user.email, 'job.signed', 'job', job.id, { signedBy: signerName });
+    await audit(client, req.user.email, 'job.signed', 'job', job.id, { signedBy: signerName, ip: signIp });
     await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
   finally { client.release(); }
 });
+
+// GET /api/portal/previous — the client's archive of COMPLETED work plus any firm
+// documents that have been shared with them (final returns, notices of assessment).
+// Read-only. Never exposes staff names or internal notes.
+app.get('/api/portal/previous', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const cr = await pool.query('SELECT id FROM clients WHERE lower(email)=$1', [normAccount(req.user.email)]);
+    if (!cr.rows.length) return res.json({ ok: true, jobs: [] });
+    const clientIds = cr.rows.map((r) => r.id);
+    const jr = await pool.query(
+      `SELECT j.id, j.job_type, j.financial_year, j.stage, j.updated_at, e.entity_name
+         FROM jobs j LEFT JOIN entities e ON e.id=j.entity_id
+        WHERE j.client_id = ANY($1) AND j.stage='09_completed'
+        ORDER BY j.updated_at DESC`, [clientIds]);
+    const me = normAccount(req.user.email);
+    const jobs = [];
+    for (const j of jr.rows) {
+      // Only client-visible documents (their own uploads OR firm-shared deliverables).
+      const dr = await pool.query(
+        `SELECT id, category, filename, created_at,
+                (client_visible AND lower(uploaded_by) <> $2) AS shared_by_firm
+           FROM documents
+          WHERE job_id=$1 AND (client_visible = true OR lower(uploaded_by) = $2)
+          ORDER BY created_at DESC`, [j.id, me]);
+      jobs.push({
+        id: j.id, jobType: j.job_type, financialYear: j.financial_year,
+        entityName: j.entity_name, completedAt: j.updated_at, documents: dr.rows,
+      });
+    }
+    res.json({ ok: true, jobs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================= SECURE CLIENT MESSAGING (Stage 6) =================
+// A single conversation thread per client between them and the firm. The client
+// side never shows staff names — all firm replies are attributed to "Syraxx".
+
+// GET /api/portal/messages — the client's full conversation thread. Marks inbound
+// (firm→client) messages as read by the client.
+app.get('/api/portal/messages', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.json({ ok: true, messages: [] });
+    const r = await pool.query(
+      `SELECT id, job_id, direction, body, created_at FROM client_messages
+        WHERE client_id=$1 ORDER BY created_at ASC`, [clientId]);
+    await pool.query("UPDATE client_messages SET read_by_client=true WHERE client_id=$1 AND direction='out' AND read_by_client=false", [clientId]);
+    res.json({ ok: true, messages: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/portal/messages/count — unread firm→client messages (for a badge).
+app.get('/api/portal/messages/count', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.json({ ok: true, count: 0 });
+    const r = await pool.query("SELECT COUNT(*)::int AS n FROM client_messages WHERE client_id=$1 AND direction='out' AND read_by_client=false", [clientId]);
+    res.json({ ok: true, count: r.rows[0].n });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portal/messages { body } — client sends a message to the firm.
+app.post('/api/portal/messages', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.status(404).json({ error: 'no client profile' });
+    const body = String(req.body.body || '').trim().slice(0, 4000);
+    if (!body) return res.status(400).json({ error: 'message is empty' });
+    const ins = await pool.query(
+      "INSERT INTO client_messages (client_id, direction, sender_email, body, read_by_client) VALUES ($1,'in',$2,$3,true) RETURNING id, direction, body, created_at",
+      [clientId, normAccount(req.user.email), body]);
+    await audit(pool, req.user.email, 'message.client_send', 'client', clientId, {});
+    // Notify the client's assigned accountants (best effort) that a new message arrived.
+    const jr = await pool.query("SELECT DISTINCT accountant_email FROM jobs WHERE client_id=$1 AND accountant_email IS NOT NULL", [clientId]);
+    jr.rows.forEach((row) => {
+      notifyBg({ toEmail: row.accountant_email, rawSubject: 'New client message',
+        rawBody: 'A client sent a new message via the portal. Log in to view and reply.' });
+    });
+    res.json({ ok: true, message: ins.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- Staff side ----
+// GET /api/clients/:id/messages — staff view a client's thread (marks inbound read).
+app.get('/api/clients/:id/messages', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    // Accountants may only view clients they have a job with.
+    if (req.user.role === 'accountant') {
+      const own = await pool.query('SELECT 1 FROM jobs WHERE client_id=$1 AND lower(accountant_email)=lower($2) LIMIT 1', [req.params.id, req.user.email]);
+      if (!own.rows.length) return res.status(403).json({ error: 'You can only message your own clients' });
+    }
+    const r = await pool.query(
+      `SELECT m.id, m.job_id, m.direction, m.sender_email, m.body, m.created_at, u.name AS sender_name
+         FROM client_messages m LEFT JOIN users u ON lower(u.email)=lower(m.sender_email)
+        WHERE m.client_id=$1 ORDER BY m.created_at ASC`, [req.params.id]);
+    await pool.query("UPDATE client_messages SET read_by_staff=true WHERE client_id=$1 AND direction='in' AND read_by_staff=false", [req.params.id]);
+    res.json({ ok: true, messages: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/clients/:id/messages { body } — staff reply to a client.
+app.post('/api/clients/:id/messages', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    if (req.user.role === 'accountant') {
+      const own = await pool.query('SELECT 1 FROM jobs WHERE client_id=$1 AND lower(accountant_email)=lower($2) LIMIT 1', [req.params.id, req.user.email]);
+      if (!own.rows.length) return res.status(403).json({ error: 'You can only message your own clients' });
+    }
+    const cr = await pool.query('SELECT id, email FROM clients WHERE id=$1', [req.params.id]);
+    if (!cr.rows.length) return res.status(404).json({ error: 'client not found' });
+    const body = String(req.body.body || '').trim().slice(0, 4000);
+    if (!body) return res.status(400).json({ error: 'message is empty' });
+    const ins = await pool.query(
+      "INSERT INTO client_messages (client_id, direction, sender_email, body, read_by_staff) VALUES ($1,'out',$2,$3,true) RETURNING id, direction, body, created_at",
+      [req.params.id, normAccount(req.user.email), body]);
+    await audit(pool, req.user.email, 'message.staff_send', 'client', req.params.id, {});
+    // Email the client that a new secure message is waiting (no message body in email).
+    if (cr.rows[0].email) {
+      notifyBg({ toEmail: cr.rows[0].email, rawSubject: 'New message from Syraxx',
+        rawBody: 'You have a new secure message from our team. Please log in to your portal to read and reply.' });
+    }
+    res.json({ ok: true, message: ins.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ================= DIRECT CLIENT EMAIL + EMAIL LOG (Wave 4A) =================
+// GET /api/clients/:id/emails — staff view direct emails sent to this client's address.
+// Only lists rows with template_key='client_email' (the direct-email feature), so it never
+// leaks unrelated system notifications. Accountants are scoped to their own clients.
+app.get('/api/clients/:id/emails', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    if (req.user.role === 'accountant') {
+      const own = await pool.query('SELECT 1 FROM jobs WHERE client_id=$1 AND lower(accountant_email)=lower($2) LIMIT 1', [req.params.id, req.user.email]);
+      if (!own.rows.length) return res.status(403).json({ error: 'You can only view your own clients' });
+    }
+    const cr = await pool.query('SELECT id, email FROM clients WHERE id=$1', [req.params.id]);
+    if (!cr.rows.length) return res.status(404).json({ error: 'client not found' });
+    if (!cr.rows[0].email) return res.json({ ok: true, emails: [] });
+    const r = await pool.query(
+      `SELECT id, subject, body, status, created_at FROM notifications
+         WHERE lower(to_email)=lower($1) AND template_key='client_email'
+         ORDER BY created_at DESC LIMIT 50`, [cr.rows[0].email]);
+    res.json({ ok: true, emails: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/clients/:id/email { subject, body } — staff send a direct email to a client.
+// The subject + body ARE the email content (unlike secure messages, which only notify).
+// Sends via sendNotification (real SMTP if configured, otherwise logged) and records it in
+// the notifications table with template_key='client_email' for the email log above.
+app.post('/api/clients/:id/email', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    if (req.user.role === 'accountant') {
+      const own = await pool.query('SELECT 1 FROM jobs WHERE client_id=$1 AND lower(accountant_email)=lower($2) LIMIT 1', [req.params.id, req.user.email]);
+      if (!own.rows.length) return res.status(403).json({ error: 'You can only email your own clients' });
+    }
+    const cr = await pool.query('SELECT id, email, name FROM clients WHERE id=$1', [req.params.id]);
+    if (!cr.rows.length) return res.status(404).json({ error: 'client not found' });
+    if (!cr.rows[0].email) return res.status(400).json({ error: 'This client has no email address on file' });
+    const subject = String(req.body.subject || '').trim().slice(0, 200);
+    const body = String(req.body.body || '').trim().slice(0, 8000);
+    if (!subject) return res.status(400).json({ error: 'Subject is required' });
+    if (!body) return res.status(400).json({ error: 'Message body is required' });
+    const result = await sendNotification(pool, { toEmail: cr.rows[0].email, templateKey: 'client_email', rawSubject: subject, rawBody: body });
+    await audit(pool, req.user.email, 'client.email_sent', 'client', req.params.id, { subject });
+    res.json({ ok: true, status: result.status });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ================= APPOINTMENTS (Setmore, Stage 7) =================
+// Format a JS Date as Setmore's dd/MM/yyyy (for slots).
+function setmoreDate(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear();
+}
+
+// GET /api/appointments/services — bookable services + the staff who can deliver them.
+// Available to any signed-in user (client or staff).
+app.get('/api/appointments/services', requireAuth, async (req, res) => {
+  try {
+    if (!setmore.isConfigured()) return res.json({ ok: true, configured: false, services: [], staff: [] });
+    const [services, staff] = await Promise.all([setmore.getServices(), setmore.getStaff()]);
+    res.json({ ok: true, configured: true, services, staff });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// GET /api/appointments/slots?staffKey=&serviceKey=&date=YYYY-MM-DD — free slots.
+app.get('/api/appointments/slots', requireAuth, async (req, res) => {
+  try {
+    if (!setmore.isConfigured()) return res.json({ ok: true, slots: [] });
+    const staffKey = String(req.query.staffKey || '');
+    const serviceKey = String(req.query.serviceKey || '');
+    const isoDate = String(req.query.date || '');
+    if (!staffKey || !serviceKey || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+      return res.status(400).json({ error: 'staffKey, serviceKey and date (YYYY-MM-DD) are required' });
+    }
+    const [y, m, d] = isoDate.split('-').map(Number);
+    const slots = await setmore.getSlots(staffKey, serviceKey, setmoreDate(new Date(y, m - 1, d)), 30);
+    res.json({ ok: true, slots });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// POST /api/portal/appointments { serviceKey, serviceName, staffKey, staffName, date, slot, durationMins }
+// Client books an appointment. We create a Setmore customer + appointment, then
+// mirror it locally for the portal.
+app.post('/api/portal/appointments', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    if (!setmore.isConfigured()) return res.status(400).json({ error: 'Online booking is not available right now.' });
+    const cr = await pool.query('SELECT id, name, email, phone FROM clients WHERE lower(email)=$1 ORDER BY id LIMIT 1', [normAccount(req.user.email)]);
+    if (!cr.rows.length) return res.status(404).json({ error: 'no client profile' });
+    const client = cr.rows[0];
+    const b = req.body || {};
+    const isoDate = String(b.date || '');
+    const slot = String(b.slot || '');
+    if (!b.serviceKey || !b.staffKey || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate) || !slot) {
+      return res.status(400).json({ error: 'serviceKey, staffKey, date and slot are required' });
+    }
+    const times = setmore.slotToTimes(isoDate, slot, Number(b.durationMins) || 30);
+    // Create / reuse the Setmore customer for this client.
+    const nameParts = String(client.name || 'Client').trim().split(/\s+/);
+    const customerKey = await setmore.createCustomer({
+      firstName: nameParts[0] || 'Client',
+      lastName: nameParts.slice(1).join(' '),
+      email: client.email || '',
+      phone: client.phone || '',
+    });
+    const appt = await setmore.createAppointment({
+      staffKey: b.staffKey, serviceKey: b.serviceKey, customerKey: customerKey,
+      startTime: times.start_time, endTime: times.end_time,
+    });
+    const apptKey = (appt && (appt.appointment && appt.appointment.key)) || (appt && appt.key) || null;
+    // Mirror locally.
+    const ins = await pool.query(
+      `INSERT INTO appointments (client_id, setmore_appt_key, service_key, service_name, staff_key, staff_name, start_time, end_time, booked_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [client.id, apptKey, b.serviceKey, b.serviceName || null, b.staffKey, b.staffName || null,
+       times.start_time, times.end_time, req.user.email]);
+    await audit(pool, req.user.email, 'appointment.book', 'client', client.id, { apptKey, serviceKey: b.serviceKey, start: times.start_time });
+    res.json({ ok: true, id: ins.rows[0].id, setmoreKey: apptKey });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// GET /api/portal/appointments — the client's own upcoming + past appointments.
+app.get('/api/portal/appointments', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const cr = await pool.query('SELECT id FROM clients WHERE lower(email)=$1', [normAccount(req.user.email)]);
+    if (!cr.rows.length) return res.json({ ok: true, upcoming: [], past: [] });
+    const clientIds = cr.rows.map((r) => r.id);
+    const r = await pool.query(
+      `SELECT id, service_key, service_name, staff_key, staff_name, start_time, end_time, status
+         FROM appointments WHERE client_id = ANY($1) AND status='booked' ORDER BY start_time ASC`, [clientIds]);
+    const now = Date.now();
+    const upcoming = [], past = [];
+    r.rows.forEach((a) => { (new Date(a.start_time).getTime() >= now ? upcoming : past).push(a); });
+    res.json({ ok: true, upcoming, past: past.reverse() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Helper: load a client-owned, still-booked, upcoming appointment (shared by cancel + reschedule).
+async function loadOwnedUpcomingAppt(runner, userEmail, apptId) {
+  const cr = await runner.query('SELECT id FROM clients WHERE lower(email)=$1', [normAccount(userEmail)]);
+  if (!cr.rows.length) return { error: 404, msg: 'no client profile' };
+  const clientIds = cr.rows.map((r) => r.id);
+  const ar = await runner.query('SELECT * FROM appointments WHERE id=$1 AND client_id = ANY($2)', [apptId, clientIds]);
+  if (!ar.rows.length) return { error: 404, msg: 'appointment not found' };
+  const appt = ar.rows[0];
+  if (appt.status !== 'booked') return { error: 400, msg: 'this appointment is no longer active' };
+  if (new Date(appt.start_time).getTime() < Date.now()) return { error: 400, msg: 'past appointments cannot be changed' };
+  return { appt, clientIds };
+}
+
+// POST /api/portal/appointments/:id/cancel — client cancels their own upcoming booking.
+app.post('/api/portal/appointments/:id/cancel', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const found = await loadOwnedUpcomingAppt(pool, req.user.email, req.params.id);
+    if (found.error) return res.status(found.error).json({ error: found.msg });
+    const appt = found.appt;
+    // Setmore has no cancel API; flag the booking's label so staff can spot it
+    // in the dashboard. Best-effort — never block the local cancel if it errors.
+    if (appt.setmore_appt_key && setmore.isConfigured()) {
+      try { await setmore.labelAppointment(appt.setmore_appt_key, 'CANCELLED'); }
+      catch (e) { console.error('[appt cancel setmore label]', e.message); }
+    }
+    await pool.query("UPDATE appointments SET status='cancelled' WHERE id=$1", [appt.id]);
+    await audit(pool, req.user.email, 'appointment.cancel', 'client', appt.client_id, { apptId: appt.id, setmoreKey: appt.setmore_appt_key });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portal/appointments/:id/reschedule { date, slot, durationMins } — move to a new time.
+// Implemented as create-new-then-cancel-old on Setmore, keeping the same service + staff.
+app.post('/api/portal/appointments/:id/reschedule', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    if (!setmore.isConfigured()) return res.status(400).json({ error: 'Online booking is not available right now.' });
+    const found = await loadOwnedUpcomingAppt(pool, req.user.email, req.params.id);
+    if (found.error) return res.status(found.error).json({ error: found.msg });
+    const appt = found.appt;
+    const b = req.body || {};
+    const isoDate = String(b.date || '');
+    const slot = String(b.slot || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate) || !slot) return res.status(400).json({ error: 'date and slot are required' });
+    if (!appt.service_key || !appt.staff_key) return res.status(400).json({ error: 'this appointment cannot be rescheduled online' });
+    const cr = await pool.query('SELECT id, name, email, phone FROM clients WHERE id=$1', [appt.client_id]);
+    const client = cr.rows[0];
+    const times = setmore.slotToTimes(isoDate, slot, Number(b.durationMins) || 30);
+    const nameParts = String(client.name || 'Client').trim().split(/\s+/);
+    const customerKey = await setmore.createCustomer({
+      firstName: nameParts[0] || 'Client', lastName: nameParts.slice(1).join(' '),
+      email: client.email || '', phone: client.phone || '',
+    });
+    // Book the new slot first so a Setmore failure leaves the original intact.
+    const newAppt = await setmore.createAppointment({
+      staffKey: appt.staff_key, serviceKey: appt.service_key, customerKey: customerKey,
+      startTime: times.start_time, endTime: times.end_time,
+    });
+    const newKey = (newAppt && (newAppt.appointment && newAppt.appointment.key)) || (newAppt && newAppt.key) || null;
+    // Flag the OLD Setmore booking (no cancel API) so staff can clear it. Best-effort.
+    if (appt.setmore_appt_key) {
+      try { await setmore.labelAppointment(appt.setmore_appt_key, 'CANCELLED - rescheduled'); }
+      catch (e) { console.error('[appt reschedule setmore label]', e.message); }
+    }
+    await pool.query(
+      'UPDATE appointments SET setmore_appt_key=$1, start_time=$2, end_time=$3 WHERE id=$4',
+      [newKey, times.start_time, times.end_time, appt.id]);
+    await audit(pool, req.user.email, 'appointment.reschedule', 'client', appt.client_id, { apptId: appt.id, from: appt.start_time, to: times.start_time });
+    res.json({ ok: true, id: appt.id, start_time: times.start_time });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 
 // ================= EXISTING TAX-TRACKER API (unchanged) =================
 function recordsOf(appName, data) {
@@ -1874,7 +3186,7 @@ async function syncFlat(client, account, appName, data) {
   }
 }
 
-app.post('/api/save', async (req, res) => {
+app.post('/api/save', requireAuth, enforceAccountAccess, async (req, res) => {
   const appName = req.body.app;
   const account = normAccount(req.body.account);
   const data = req.body.data;
@@ -1907,7 +3219,7 @@ app.post('/api/save', async (req, res) => {
   finally { client.release(); }
 });
 
-app.get('/api/load', async (req, res) => {
+app.get('/api/load', requireAuth, enforceAccountAccess, async (req, res) => {
   const appName = req.query.app;
   const account = normAccount(req.query.account);
   if (!validApp(appName)) return res.status(400).json({ error: 'invalid app' });
@@ -1919,7 +3231,7 @@ app.get('/api/load', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/list', async (req, res) => {
+app.get('/api/list', requireAuth, enforceAccountAccess, async (req, res) => {
   const account = normAccount(req.query.account);
   if (!account) return res.status(400).json({ error: 'account required' });
   try {
@@ -1928,7 +3240,7 @@ app.get('/api/list', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/merge', async (req, res) => {
+app.post('/api/merge', requireAuth, enforceAccountAccess, async (req, res) => {
   const appName = req.body.app;
   const account = normAccount(req.body.account);
   const incoming = req.body.data;
@@ -1968,7 +3280,7 @@ app.post('/api/merge', async (req, res) => {
   finally { client.release(); }
 });
 
-app.get('/api/export', async (req, res) => {
+app.get('/api/export', requireAuth, enforceAccountAccess, async (req, res) => {
   const appName = req.query.app;
   const account = normAccount(req.query.account);
   if (!validApp(appName)) return res.status(400).json({ error: 'invalid app' });

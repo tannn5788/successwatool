@@ -10,6 +10,17 @@
   var STORE_QUOTA = 5 * 1024 * 1024;
   var FREE_ENTRY_CAP = 10;
 
+  // Cloud endpoints now require a signed-in session. Attach the saved token.
+  function authToken() {
+    try { return (JSON.parse(localStorage.getItem('successwa.auth') || 'null') || {}).token || ''; } catch (e) { return ''; }
+  }
+  function authHeaders(extra) {
+    var h = extra || {};
+    var t = authToken();
+    if (t) h['Authorization'] = 'Bearer ' + t;
+    return h;
+  }
+
   /* ---------------------------------------------------------
      Rate tables. Australian resident rates, keyed by the FY
      starting year. Keep every published figure in this one
@@ -263,7 +274,7 @@
     if (cloudTimer) clearTimeout(cloudTimer);
     cloudTimer = setTimeout(function () {
       fetch('/api/save', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ app: 'personal', account: account, data: state })
       }).then(function (r) { if (r.ok) { var d = $('cloudDot'); if (d) { d.textContent = '☁ synced'; } } })
         .catch(function () {});
@@ -881,7 +892,7 @@
     state.settings.cloudAccount = account; save();
     toast('Saving to cloud…');
     fetch('/api/save', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ app: 'personal', account: account, data: state })
     }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
@@ -893,7 +904,7 @@
     var account = ($('cloudAccount').value || '').trim().toLowerCase();
     if (!account) { toast('Enter your account email/ID first'); return; }
     toast('Loading from cloud…');
-    fetch('/api/load?app=personal&account=' + encodeURIComponent(account))
+    fetch('/api/load?app=personal&account=' + encodeURIComponent(account), { headers: authHeaders() })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         if (!res.ok) throw new Error(res.j.error || 'not found');

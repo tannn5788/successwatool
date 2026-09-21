@@ -17,6 +17,8 @@
 
   function show(tab) {
     if (tab === 'users') return loadUsers();
+    if (tab === 'announcement') return loadAnnouncement();
+    if (tab === 'automations') return loadAutomations();
     if (tab === 'templates') return loadTemplates();
     if (tab === 'audit') return loadAudit();
     if (tab === 'integrations') return loadIntegrations();
@@ -122,6 +124,181 @@
             subject: panel.querySelector('[data-sub="' + k + '"]').value,
             body: panel.querySelector('[data-body="' + k + '"]').value } })
             .then(function () { Hub.toast('Template saved'); }).catch(function (e) { Hub.toast(e.message); });
+        });
+      });
+    }).catch(function (e) { panel.innerHTML = '<p class="muted">Error: ' + esc(e.message) + '</p>'; });
+  }
+
+  // ---- Announcement (client Home banner) ----
+  function loadAnnouncement() {
+    panel.innerHTML = '<p class="muted">Loading…</p>';
+    Nav.api('/api/admin/announcement').then(function (res) {
+      var a = res.announcement || { enabled: false, title: '', body: '' };
+      panel.innerHTML =
+        '<div class="card" style="max-width:640px">' +
+        '<div class="section-title">Client Home announcement</div>' +
+        '<p class="muted small">Shown as a banner on every client\u2019s Home page. Leave disabled to hide it.</p>' +
+        '<label style="display:flex;align-items:center;gap:8px;margin:10px 0">' +
+        '<input type="checkbox" id="anEnabled"' + (a.enabled ? ' checked' : '') + '> <b>Show this announcement to clients</b></label>' +
+        '<label class="field"><span>Title</span>' +
+        '<input type="text" id="anTitle" maxlength="200" value="' + esc(a.title || '') + '" placeholder="e.g. Tax season deadlines"></label>' +
+        '<label class="field" style="margin-top:10px"><span>Message</span>' +
+        '<textarea id="anBody" rows="5" maxlength="2000" placeholder="Write your announcement here…">' + esc(a.body || '') + '</textarea></label>' +
+        '<div class="modal-actions" style="justify-content:flex-start;margin-top:12px">' +
+        '<button class="btn btn-primary btn-sm" id="anSave">Save announcement</button></div>' +
+        '</div>';
+      document.getElementById('anSave').addEventListener('click', function () {
+        Nav.api('/api/admin/announcement', { method: 'PUT', body: {
+          enabled: document.getElementById('anEnabled').checked,
+          title: document.getElementById('anTitle').value,
+          body: document.getElementById('anBody').value } })
+          .then(function () { Hub.toast('Announcement saved'); }).catch(function (e) { Hub.toast(e.message); });
+      });
+    }).catch(function (e) { panel.innerHTML = '<p class="muted">Error: ' + esc(e.message) + '</p>'; });
+  }
+
+  // ---- Automations (multi-trigger rules + SLA limits) ----
+  var ACTION_LABELS = {
+    notify_client: 'Email the client (template) — email pending',
+    set_action_required: 'Flag job as Action Required',
+    clear_action_required: 'Clear Action Required flag',
+    add_note: 'Add an internal note',
+    notify_staff: 'Notify a staff member (bell)',
+  };
+  var JOB_ONLY_ACTIONS = ['set_action_required', 'clear_action_required', 'add_note'];
+  function loadAutomations() {
+    panel.innerHTML = '<p class="muted">Loading…</p>';
+    Nav.api('/api/admin/automations').then(function (res) {
+      var stages = res.stages || [];
+      var map = res.stageMap || {};
+      var triggers = res.triggers || [{ type: 'stage_enter', label: 'Job enters a stage', key: 'stage' }];
+      var triggerLabel = {}; triggers.forEach(function (t) { triggerLabel[t.type] = t.label; });
+      var limitByStage = {}; (res.limits || []).forEach(function (l) { limitByStage[l.stage] = l.limit_days; });
+      var stageOpts = stages.map(function (s) {
+        return '<option value="' + esc(s) + '">' + esc((map[s] && map[s].internalLabel) || s) + '</option>';
+      }).join('');
+      var triggerOpts = triggers.map(function (t) {
+        return '<option value="' + esc(t.type) + '">' + esc(t.label) + '</option>';
+      }).join('');
+      var actionOpts = Object.keys(ACTION_LABELS).map(function (a) {
+        return '<option value="' + a + '">' + esc(ACTION_LABELS[a]) + '</option>';
+      }).join('');
+
+      // Human description of what fires a rule.
+      function triggerDesc(r) {
+        var tt = r.trigger_type || 'stage_enter';
+        if (tt === 'stage_enter') {
+          var s = r.trigger_key || r.stage;
+          return esc(triggerLabel[tt] || tt) + ' · ' + esc((map[s] && map[s].internalLabel) || s || '?');
+        }
+        if (tt === 'job_created' && r.trigger_key) return esc(triggerLabel[tt] || tt) + ' · ' + esc(r.trigger_key);
+        return esc(triggerLabel[tt] || tt);
+      }
+
+      var ruleRows = (res.rules || []).map(function (r) {
+        var cfg = r.config || {};
+        var detail = r.action === 'add_note' ? esc(cfg.note || '')
+          : r.action === 'notify_staff' ? esc((cfg.email || '') + (cfg.note ? ' — ' + cfg.note : ''))
+          : r.action === 'notify_client' ? esc('template: ' + (cfg.templateKey || '')) : '';
+        return '<tr><td>' + triggerDesc(r) + '</td>' +
+          '<td>' + esc(ACTION_LABELS[r.action] || r.action) + '<div class="muted small">' + detail + '</div></td>' +
+          '<td>' + (r.enabled ? '<span class="pill pill-completed">on</span>' : '<span class="pill pill-hold">off</span>') + '</td>' +
+          '<td><button class="btn btn-xs" data-toggle-rule="' + r.id + '|' + (r.enabled ? '0' : '1') + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button> ' +
+          '<button class="btn btn-xs danger" data-del-rule="' + r.id + '">Delete</button></td></tr>';
+      }).join('') || '<tr><td colspan="4" class="muted small">No automation rules yet.</td></tr>';
+
+      var limitRows = stages.map(function (s) {
+        return '<tr><td>' + esc((map[s] && map[s].internalLabel) || s) + '</td>' +
+          '<td><input type="number" min="0" class="lim-input" data-stage="' + esc(s) + '" value="' + (limitByStage[s] || 0) + '" style="width:80px"> days</td>' +
+          '<td><button class="btn btn-xs" data-save-lim="' + esc(s) + '">Save</button></td></tr>';
+      }).join('');
+
+      panel.innerHTML =
+        '<div class="card" style="margin-bottom:16px">' +
+          '<div class="section-title">Automation rules</div>' +
+          '<p class="muted small">When the chosen <b>event</b> happens, run these actions automatically.</p>' +
+          '<table class="hub-table"><thead><tr><th>Trigger</th><th>Action</th><th>Status</th><th></th></tr></thead><tbody>' + ruleRows + '</tbody></table>' +
+          '<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
+              '<label class="field" style="margin:0"><span>Trigger</span><select id="arTrigger">' + triggerOpts + '</select></label>' +
+              '<label class="field" style="margin:0" id="arStageWrap"><span id="arKeyLabel">Stage</span><select id="arStage">' + stageOpts + '</select></label>' +
+              '<label class="field" style="margin:0;display:none" id="arKeyWrap"><span>Job type (optional)</span><input type="text" id="arKey" placeholder="blank = any"></label>' +
+              '<label class="field" style="margin:0"><span>Action</span><select id="arAction">' + actionOpts + '</select></label>' +
+              '<label class="field" style="margin:0;flex:1;min-width:200px"><span id="arCfgLabel">Detail</span><input type="text" id="arCfg" placeholder="note text / staff email / template key"></label>' +
+              '<button class="btn btn-primary btn-sm" id="arAdd">Add rule</button>' +
+            '</div>' +
+            '<p class="muted small" id="arWarn" style="margin-top:8px;display:none;color:var(--red)"></p>' +
+          '</div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="section-title">Stage time limits (SLA)</div>' +
+          '<p class="muted small">If a job sits in a stage longer than this many days, it is highlighted as overdue on the Pipeline board. 0 = no limit.</p>' +
+          '<table class="hub-table"><thead><tr><th>Stage</th><th>Limit</th><th></th></tr></thead><tbody>' + limitRows + '</tbody></table>' +
+        '</div>';
+
+      // Show the right "key" field for the selected trigger.
+      var triggerHint = function () {
+        var tt = document.getElementById('arTrigger').value;
+        document.getElementById('arStageWrap').style.display = (tt === 'stage_enter') ? '' : 'none';
+        document.getElementById('arKeyWrap').style.display = (tt === 'job_created') ? '' : 'none';
+      };
+      document.getElementById('arTrigger').addEventListener('change', function () { triggerHint(); actionWarn(); });
+
+      var cfgHint = function () {
+        var a = document.getElementById('arAction').value;
+        var lbl = document.getElementById('arCfgLabel');
+        var inp = document.getElementById('arCfg');
+        if (a === 'add_note') { lbl.textContent = 'Note text'; inp.placeholder = 'e.g. Auto: prep started'; inp.style.display = ''; }
+        else if (a === 'notify_staff') { lbl.textContent = 'Staff email'; inp.placeholder = 'e.g. supervisor@successwa.com'; inp.style.display = ''; }
+        else if (a === 'notify_client') { lbl.textContent = 'Template key'; inp.placeholder = 'e.g. documents_received'; inp.style.display = ''; }
+        else { lbl.textContent = 'No detail needed'; inp.value = ''; inp.style.display = 'none'; }
+      };
+      // Warn when a job-only action is picked with the client_created trigger.
+      var actionWarn = function () {
+        var tt = document.getElementById('arTrigger').value;
+        var a = document.getElementById('arAction').value;
+        var warn = document.getElementById('arWarn');
+        if (tt === 'client_created' && JOB_ONLY_ACTIONS.indexOf(a) !== -1) {
+          warn.textContent = 'That action needs a job. On "Client is created", use "Notify a staff member".';
+          warn.style.display = '';
+        } else { warn.style.display = 'none'; }
+      };
+      document.getElementById('arAction').addEventListener('change', function () { cfgHint(); actionWarn(); });
+      triggerHint(); cfgHint();
+
+      document.getElementById('arAdd').addEventListener('click', function () {
+        var triggerType = document.getElementById('arTrigger').value;
+        var action = document.getElementById('arAction').value;
+        var val = document.getElementById('arCfg').value;
+        var config = {};
+        if (action === 'add_note') config.note = val;
+        else if (action === 'notify_staff') config.email = val;
+        else if (action === 'notify_client') config.templateKey = val;
+        var triggerKey = triggerType === 'stage_enter' ? document.getElementById('arStage').value
+          : triggerType === 'job_created' ? document.getElementById('arKey').value : '';
+        Nav.api('/api/admin/automations', { method: 'POST', body: {
+          triggerType: triggerType, triggerKey: triggerKey, action: action, config: config } })
+          .then(function () { Hub.toast('Rule added'); loadAutomations(); }).catch(function (e) { Hub.toast(e.message); });
+      });
+      Array.prototype.forEach.call(panel.querySelectorAll('[data-toggle-rule]'), function (b) {
+        b.addEventListener('click', function () {
+          var p = b.getAttribute('data-toggle-rule').split('|');
+          Nav.api('/api/admin/automations/' + p[0], { method: 'PATCH', body: { enabled: p[1] === '1' } })
+            .then(function () { loadAutomations(); }).catch(function (e) { Hub.toast(e.message); });
+        });
+      });
+      Array.prototype.forEach.call(panel.querySelectorAll('[data-del-rule]'), function (b) {
+        b.addEventListener('click', function () {
+          Nav.api('/api/admin/automations/' + b.getAttribute('data-del-rule'), { method: 'DELETE' })
+            .then(function () { Hub.toast('Rule deleted'); loadAutomations(); }).catch(function (e) { Hub.toast(e.message); });
+        });
+      });
+      Array.prototype.forEach.call(panel.querySelectorAll('[data-save-lim]'), function (b) {
+        b.addEventListener('click', function () {
+          var s = b.getAttribute('data-save-lim');
+          var inp = panel.querySelector('.lim-input[data-stage="' + s + '"]');
+          Nav.api('/api/admin/stage-limits/' + encodeURIComponent(s), { method: 'PUT', body: { limitDays: Number(inp.value) || 0 } })
+            .then(function () { Hub.toast('Limit saved'); }).catch(function (e) { Hub.toast(e.message); });
         });
       });
     }).catch(function (e) { panel.innerHTML = '<p class="muted">Error: ' + esc(e.message) + '</p>'; });

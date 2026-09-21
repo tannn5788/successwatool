@@ -10,6 +10,17 @@
   var STORE_QUOTA = 5 * 1024 * 1024;
   var FREE_TX_CAP = 10;
   var GST_RATE = 0.10;           // Australian GST is 10%
+
+  // Cloud endpoints now require a signed-in session. Attach the saved token.
+  function authToken() {
+    try { return (JSON.parse(localStorage.getItem('successwa.auth') || 'null') || {}).token || ''; } catch (e) { return ''; }
+  }
+  function authHeaders(extra) {
+    var h = extra || {};
+    var t = authToken();
+    if (t) h['Authorization'] = 'Bearer ' + t;
+    return h;
+  }
   var GST_DIVISOR = 11;          // GST portion of a GST-inclusive amount = amount / 11
 
   var INCOME_CATEGORIES = {
@@ -139,7 +150,7 @@
     if (cloudTimer) clearTimeout(cloudTimer);
     cloudTimer = setTimeout(function () {
       fetch('/api/save', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ app: 'business', account: account, data: state })
       }).catch(function () {});
     }, 1200);
@@ -608,7 +619,7 @@
     state.settings.cloudAccount = account; save();
     toast('Saving to cloud…');
     fetch('/api/save', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ app: 'business', account: account, data: state })
     }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
@@ -620,7 +631,7 @@
     var account = ($('cloudAccount').value || '').trim().toLowerCase();
     if (!account) { toast('Enter your account email/ID first'); return; }
     toast('Loading from cloud…');
-    fetch('/api/load?app=business&account=' + encodeURIComponent(account))
+    fetch('/api/load?app=business&account=' + encodeURIComponent(account), { headers: authHeaders() })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         if (!res.ok) throw new Error(res.j.error || 'not found');

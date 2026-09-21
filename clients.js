@@ -73,6 +73,7 @@
           '<p class="muted small">' + esc(c.email || 'no email') + ' · ' + esc(c.phone || 'no phone') + '</p></div>' +
           '<div style="display:flex;gap:8px">' +
           '<button class="btn btn-ghost btn-sm" data-editclient="' + esc(c.id) + '" data-tip="Edit this client\'s name, email and phone. The email is their portal login.">Edit</button>' +
+          '<button class="btn btn-ghost btn-sm" data-emailclient="' + esc(c.id) + '" data-cemail="' + esc(c.email || '') + '" data-cname="' + esc(c.name || '') + '" data-tip="Send a direct email to this client and view the email history.">Email</button>' +
           '<button class="btn btn-outline btn-sm" data-ent="' + esc(c.id) + '" data-tip="Add another entity (individual, company, trust) under this client.">+ Entity</button></div></div>' +
           (item.entities.length ?
             '<table class="hub-table" style="margin-top:12px"><thead><tr><th>Entity ID</th><th>Name</th><th>Type</th><th>ABN</th><th></th></tr></thead><tbody>' + ents + '</tbody></table>'
@@ -110,6 +111,11 @@
         if (found) editClientModal(found);
       });
     });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-emailclient]'), function (b) {
+      b.addEventListener('click', function () {
+        emailClientModal(b.getAttribute('data-emailclient'), b.getAttribute('data-cemail'), b.getAttribute('data-cname'));
+      });
+    });
   }
 
   // ---- Edit client ----
@@ -128,6 +134,42 @@
         .then(function () { m.close(); Hub.toast('Client updated'); load(); })
         .catch(function (e) { Hub.toast(e.message); });
     });
+  }
+
+  // ---- Email client (Wave 4A) ----
+  function emailClientModal(id, email, name) {
+    if (!email) { Hub.toast('This client has no email address on file'); return; }
+    var m = Hub.modal('Email ' + (name || id),
+      '<p class="muted small">To: ' + esc(email) + '</p>' +
+      '<div class="field"><label>Subject</label><input id="emSubj" placeholder="e.g. Your 2024 tax return is ready"/></div>' +
+      '<div class="field"><label>Message</label><textarea id="emBody" rows="6" placeholder="Write your email to the client..."></textarea></div>' +
+      '<div class="modal-actions"><button class="btn btn-ghost" id="emCancel">Cancel</button><button class="btn btn-primary" id="emSend">Send email</button></div>' +
+      '<hr style="margin:16px 0;border:none;border-top:1px solid var(--border)"/>' +
+      '<h4 style="margin:0 0 8px">Email history</h4><div id="emHist" class="muted small">Loading…</div>');
+    m.q('#emCancel').addEventListener('click', m.close);
+    m.q('#emSend').addEventListener('click', function () {
+      var subject = m.q('#emSubj').value.trim();
+      var body = m.q('#emBody').value.trim();
+      if (!subject) { Hub.toast('Subject is required'); return; }
+      if (!body) { Hub.toast('Message body is required'); return; }
+      Hub.busy(m.q('#emSend'), Nav.api('/api/clients/' + encodeURIComponent(id) + '/email', { method: 'POST', body: { subject: subject, body: body } }))
+        .then(function () { Hub.toast('Email sent'); m.q('#emSubj').value = ''; m.q('#emBody').value = ''; loadHist(); })
+        .catch(function (e) { Hub.toast(e.message); });
+    });
+    function loadHist() {
+      Nav.api('/api/clients/' + encodeURIComponent(id) + '/emails').then(function (r) {
+        var rows = r.emails || [];
+        if (!rows.length) { m.q('#emHist').innerHTML = '<span class="muted small">No emails sent yet.</span>'; return; }
+        m.q('#emHist').innerHTML = rows.map(function (e) {
+          var when = e.created_at ? new Date(e.created_at).toLocaleString() : '';
+          return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">' +
+            '<div style="display:flex;justify-content:space-between;gap:8px"><strong>' + esc(e.subject || '(no subject)') + '</strong>' +
+            '<span class="muted small">' + esc(when) + '</span></div>' +
+            '<div class="muted small" style="white-space:pre-wrap;margin-top:2px">' + esc(e.body || '') + '</div></div>';
+        }).join('');
+      }).catch(function (e) { m.q('#emHist').innerHTML = '<span class="muted small">' + esc(e.message) + '</span>'; });
+    }
+    loadHist();
   }
 
   // ---- New client ----

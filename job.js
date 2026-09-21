@@ -9,6 +9,7 @@
   if (!jobId) { document.getElementById('main').innerHTML = '<p class="muted">No job specified.</p>'; return; }
 
   var guideShown = false;
+  var staffList = [];   // [{email,name,role}] for @mention autocomplete
   function showGuide() {
     if (guideShown) return; guideShown = true;
     Hub.guide('job', auth.role, {
@@ -20,6 +21,7 @@
   }
 
   function load() {
+    Nav.api('/api/staff').then(function (r) { staffList = r.staff || []; }).catch(function () { staffList = []; });
     Nav.api('/api/jobs/' + encodeURIComponent(jobId)).then(render).catch(function (e) {
       document.getElementById('main').innerHTML = '<p class="muted">Error: ' + esc(e.message) + '</p>';
     });
@@ -55,6 +57,7 @@
         '<td>' +
         (canPreview ? '<button class="btn btn-xs" data-preview="' + d.id + '" data-tip="Open this document in a new tab.">Preview</button> ' : '') +
         '<a class="btn btn-xs" href="/api/documents/' + d.id + '/download" data-dl="' + d.id + '" data-tip="Download this document to your computer.">Download</a> ' +
+        '<button class="btn btn-xs ' + (d.client_visible ? 'btn-primary' : '') + '" data-share="' + d.id + '" data-vis="' + (d.client_visible ? '1' : '0') + '" data-tip="' + (d.client_visible ? 'Shared with the client. Click to unshare (hide from their portal).' : 'Hidden from the client. Click to share it in their portal (e.g. a final return or notice of assessment).') + '">' + (d.client_visible ? '✓ Shared' : 'Share') + '</button> ' +
         '<button class="btn btn-xs danger" data-deldoc="' + d.id + '" data-tip="Permanently remove this document from the job.">Delete</button></td></tr>';
     }).join('') : '<tr><td colspan="6" class="muted small">No documents uploaded.</td></tr>';
 
@@ -84,9 +87,19 @@
     var notesHtml = (res.notes || []).length ? res.notes.map(function (n) {
       var who = n.author_name || n.author || 'staff';
       var canDelete = (String(n.author || '').toLowerCase() === meEmail) || auth.role === 'administrator';
-      return '<li>' +
+      var mentions = n.mentions || [];
+      var iAmMentioned = mentions.map(function (m) { return String(m).toLowerCase(); }).indexOf(meEmail) !== -1;
+      var chips = mentions.length
+        ? '<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">' + mentions.map(function (m) {
+            var s = staffList.filter(function (x) { return String(x.email).toLowerCase() === String(m).toLowerCase(); })[0];
+            return '<span class="pill pill-received">@' + esc(s ? (s.name || s.email) : m) + '</span>';
+          }).join('') + '</div>'
+        : '';
+      return '<li' + (iAmMentioned ? ' style="border-left:3px solid var(--accent,#3167b0);padding-left:8px"' : '') + '>' +
         '<div style="white-space:pre-wrap">' + esc(n.note) + '</div>' +
+        chips +
         '<div class="t-meta">' + esc(who) + ' · ' + Hub.fmtDateTime(n.created_at) +
+        (iAmMentioned ? ' · <b style="color:var(--accent,#3167b0)">mentioned you</b>' : '') +
         (canDelete ? ' · <a href="#" class="note-del" data-note="' + n.id + '" style="color:#c0392b">Delete</a>' : '') +
         '</div></li>';
     }).join('') : '<li class="muted small">No internal notes yet.</li>';
@@ -203,10 +216,23 @@
       '<div class="card"><table class="hub-table"><thead><tr><th>Subject</th><th>To</th><th>Status</th><th>Date</th><th></th></tr></thead><tbody>' + notifHtml + '</tbody></table></div>' +
 
       '<div class="section-title">Internal notes</div>' +
-      '<div class="card" data-tip-below data-tip="Private staff notes for this job. Clients never see these. Any staff member can add a note; only the author or an administrator can delete one.">' +
-        '<div class="field" style="margin-bottom:8px"><textarea id="noteInput" rows="3" placeholder="Add an internal note for the team (e.g. offshore prep progress, questions for the supervisor)…"></textarea></div>' +
+      '<div class="card" data-tip-below data-tip="Private staff notes for this job. Clients never see these. Type @ to mention a teammate — they get a notification. Only the author or an administrator can delete a note.">' +
+        '<div class="field" style="margin-bottom:8px;position:relative">' +
+          '<textarea id="noteInput" rows="3" placeholder="Add an internal note for the team. Type @ to mention a teammate…"></textarea>' +
+          '<div id="mentionMenu" style="display:none;position:absolute;z-index:20;background:#fff;border:1px solid var(--border,#e2e5e9);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.12);max-height:200px;overflow-y:auto;min-width:220px"></div>' +
+        '</div>' +
+        '<div id="mentionChips" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px"></div>' +
         '<button class="btn btn-primary btn-sm" id="noteBtn">Add note</button>' +
         '<ul class="timeline" style="margin-top:14px">' + notesHtml + '</ul>' +
+      '</div>' +
+
+      '<div class="section-title">Messages with client</div>' +
+      '<div class="card" data-tip-below data-tip="Secure two-way messages with the client. They see these in their portal; staff names are hidden from the client (shown as Syraxx).">' +
+        '<div id="msgThread" style="max-height:340px;overflow-y:auto;padding:2px">' + '<p class="muted small">Loading messages…</p>' + '</div>' +
+        '<div style="display:flex;gap:8px;margin-top:12px;border-top:1px solid var(--border,#eef0f2);padding-top:12px">' +
+          '<textarea id="cmBody" rows="2" placeholder="Write a reply to the client…" style="flex:1;resize:vertical"></textarea>' +
+          '<button class="btn btn-primary" id="cmSend" style="align-self:flex-end">Send</button>' +
+        '</div>' +
       '</div>' +
 
       '<div class="section-title">Audit trail</div>' +
@@ -219,13 +245,72 @@
   function bind(j) {
     var $ = function (id) { return document.getElementById(id); };
 
-    // ---- Internal notes ----
+    // ---- Internal notes (with @mention) ----
+    var picked = {};   // email -> {email,name} chosen via @mention
+
+    function renderChips() {
+      var box = $('mentionChips');
+      if (!box) return;
+      var emails = Object.keys(picked);
+      box.innerHTML = emails.map(function (e) {
+        var p = picked[e];
+        return '<span class="pill pill-received" style="cursor:pointer" data-unmention="' + esc(e) + '">@' +
+          esc(p.name || e) + ' ✕</span>';
+      }).join('');
+      Array.prototype.forEach.call(box.querySelectorAll('[data-unmention]'), function (c) {
+        c.addEventListener('click', function () { delete picked[c.getAttribute('data-unmention')]; renderChips(); });
+      });
+    }
+
+    function hideMentionMenu() { var m = $('mentionMenu'); if (m) { m.style.display = 'none'; m.innerHTML = ''; } }
+
+    function showMentionMenu(query) {
+      var menu = $('mentionMenu');
+      if (!menu) return;
+      var q = (query || '').toLowerCase();
+      var me = (auth.email || '').toLowerCase();
+      var matches = staffList.filter(function (s) {
+        if (String(s.email).toLowerCase() === me) return false;
+        return !q || (s.name || '').toLowerCase().indexOf(q) !== -1 || (s.email || '').toLowerCase().indexOf(q) !== -1;
+      }).slice(0, 8);
+      if (!matches.length) { hideMentionMenu(); return; }
+      menu.innerHTML = matches.map(function (s) {
+        return '<div class="mention-opt" data-email="' + esc(s.email) + '" data-name="' + esc(s.name || s.email) + '" ' +
+          'style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border,#f0f2f4)">' +
+          '<b>' + esc(s.name || s.email) + '</b> <span class="muted small">' + esc(s.role || '') + '</span></div>';
+      }).join('');
+      menu.style.display = 'block';
+      Array.prototype.forEach.call(menu.querySelectorAll('.mention-opt'), function (o) {
+        o.addEventListener('mousedown', function (ev) {
+          ev.preventDefault();
+          var em = o.getAttribute('data-email');
+          picked[em.toLowerCase()] = { email: em, name: o.getAttribute('data-name') };
+          renderChips();
+          // strip the trailing "@query" the user was typing
+          var ta = $('noteInput');
+          ta.value = ta.value.replace(/@[^\s@]*$/, '');
+          hideMentionMenu();
+          ta.focus();
+        });
+      });
+    }
+
+    if ($('noteInput')) {
+      $('noteInput').addEventListener('input', function () {
+        var val = this.value;
+        var m = /@([^\s@]*)$/.exec(val);   // an @token at the caret/end
+        if (m) showMentionMenu(m[1]); else hideMentionMenu();
+      });
+      $('noteInput').addEventListener('blur', function () { setTimeout(hideMentionMenu, 150); });
+    }
+
     if ($('noteBtn')) $('noteBtn').addEventListener('click', function () {
       var ta = $('noteInput');
       var text = (ta.value || '').trim();
       if (!text) { Hub.toast('Type a note first'); ta.focus(); return; }
-      Hub.busy($('noteBtn'), Nav.api('/api/jobs/' + jobId + '/notes', { method: 'POST', body: { note: text } }))
-        .then(function () { ta.value = ''; Hub.toast('Note added'); load(); })
+      var mentions = Object.keys(picked);
+      Hub.busy($('noteBtn'), Nav.api('/api/jobs/' + jobId + '/notes', { method: 'POST', body: { note: text, mentions: mentions } }))
+        .then(function () { ta.value = ''; picked = {}; renderChips(); Hub.toast(mentions.length ? 'Note added · teammates notified' : 'Note added'); load(); })
         .catch(function (e) { Hub.toast(e.message); });
     });
     Array.prototype.forEach.call(document.querySelectorAll('.note-del'), function (a) {
@@ -350,6 +435,16 @@
           .catch(function (e) { Hub.toast(e.message); load(); });
       });
     });
+    // Share / unshare a document with the client (client-visible flag).
+    Array.prototype.forEach.call(document.querySelectorAll('[data-share]'), function (btn) {
+      btn.addEventListener('click', function () {
+        var docId = btn.getAttribute('data-share');
+        var makeVisible = btn.getAttribute('data-vis') !== '1'; // toggle
+        Nav.api('/api/documents/' + docId + '/visibility', { method: 'PATCH', body: { visible: makeVisible } })
+          .then(function () { Hub.toast(makeVisible ? 'Shared with client' : 'Hidden from client'); load(); })
+          .catch(function (e) { Hub.toast(e.message); });
+      });
+    });
     $('rqBtn').addEventListener('click', function () {
       var d = $('rqDesc').value.trim();
       if (!d) { Hub.toast('Description required'); return; }
@@ -428,6 +523,41 @@
           }).catch(function () { if (w) w.close(); Hub.toast('Preview failed'); });
       });
     });
+
+    // ---- Secure messages with the client ----
+    var clientId = j.client_id;
+    function renderThread(messages) {
+      var box = $('msgThread');
+      if (!box) return;
+      if (!messages.length) { box.innerHTML = '<p class="muted small" style="text-align:center;padding:16px 0">No messages yet.</p>'; return; }
+      box.innerHTML = messages.map(function (m) {
+        var fromClient = m.direction === 'in';
+        var who = fromClient ? (j.client_name || 'Client') : (m.sender_name || m.sender_email || 'Staff');
+        var align = fromClient ? 'flex-start' : 'flex-end';
+        var bg = fromClient ? 'var(--surface-2,#f0f2f5)' : 'var(--brand,#2f6df6)';
+        var col = fromClient ? 'inherit' : '#fff';
+        return '<div style="display:flex;justify-content:' + align + ';margin:6px 0">' +
+          '<div style="max-width:78%;background:' + bg + ';color:' + col + ';padding:9px 13px;border-radius:13px">' +
+            '<div style="font-size:12px;opacity:.7;margin-bottom:2px">' + esc(who) + ' · ' + Hub.fmtDateTime(m.created_at) + '</div>' +
+            '<div style="white-space:pre-wrap;word-break:break-word">' + esc(m.body) + '</div>' +
+          '</div></div>';
+      }).join('');
+      box.scrollTop = box.scrollHeight;
+    }
+    function loadThread() {
+      Nav.api('/api/clients/' + encodeURIComponent(clientId) + '/messages')
+        .then(function (r) { renderThread(r.messages || []); })
+        .catch(function (e) { var box = $('msgThread'); if (box) box.innerHTML = '<p class="muted small">' + esc(e.message) + '</p>'; });
+    }
+    if ($('cmSend')) $('cmSend').addEventListener('click', function () {
+      var ta = $('cmBody');
+      var body = ta.value.trim();
+      if (!body) { Hub.toast('Type a message'); return; }
+      Hub.busy($('cmSend'), Nav.api('/api/clients/' + encodeURIComponent(clientId) + '/messages', { method: 'POST', body: { body: body } }))
+        .then(function () { ta.value = ''; loadThread(); })
+        .catch(function (e) { Hub.toast(e.message); });
+    });
+    loadThread();
   }
 
   // ---- Reassign staff ----

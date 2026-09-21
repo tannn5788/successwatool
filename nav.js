@@ -42,11 +42,22 @@
       location.href = homeFor(a.role);
       return null;
     }
+    // Mandatory onboarding for clients: (1) complete profile, then (2) enable 2FA.
+    // The server strips the ".html" extension, so match both forms to avoid loops.
+    if (a.role === 'client') {
+      var page = location.pathname.split('/').pop().replace(/\.html$/i, '');
+      if (page !== 'secure-setup' && page !== 'complete-profile') {
+        api('/api/portal/status').then(function (s) {
+          if (!s.profileComplete) { location.replace('complete-profile.html'); return; }
+          if (!s.mfaEnabled) { location.replace('secure-setup.html'); }
+        }).catch(function () {});
+      }
+    }
     return a;
   }
 
   function homeFor(role) {
-    return role === 'client' ? 'portal.html' : 'dashboard.html';
+    return role === 'client' ? 'home.html' : 'dashboard.html';
   }
 
   function logout() {
@@ -62,15 +73,20 @@
     var links = [];
     if (a.role === 'client') {
       links = [
-        ['portal.html', 'My Jobs'],
-        ['personal.html', 'Tax Tracker'],
-        ['settings.html', 'Security'],
+        ['home.html', 'Home'],
+        ['portal.html', 'My Work'],
+        ['documents.html', 'Documents'],
+        ['appointments.html', 'Appointments'],
+        ['messages.html', 'Messages'],
+        ['previous.html', 'Previous Work'],
+        ['profile.html', 'Profile'],
         ['help.html', 'Help'],
       ];
     } else {
-      links = [['dashboard.html', 'Dashboard'], ['clients.html', 'Clients']];
+      links = [['dashboard.html', 'Dashboard'], ['pipeline.html', 'Pipeline'], ['clients.html', 'Clients']];
       if (a.role === 'supervisor') links.push(['review.html', 'Review Queue']);
       if (a.role === 'reception' || a.role === 'supervisor' || a.role === 'administrator') links.push(['recurring.html', 'Recurring']);
+      if (a.role === 'administrator' || a.role === 'supervisor') links.push(['insights.html', 'Insights']);
       if (a.role === 'administrator') links.push(['admin.html', 'Admin']);
       links.push(['settings.html', 'Security']);
       links.push(['help.html', 'Help']);
@@ -79,9 +95,9 @@
     if (!el) return;
     var html = '<div class="nav-inner">' +
       '<a class="nav-brand" href="' + homeFor(a.role) + '">' +
-        '<img src="logo.png?v=10" alt="Successwa"/>' +
+        '<img src="logo.png?v=10" alt="Syraxx"/>' +
         '<span class="nav-brand__sep" aria-hidden="true"></span>' +
-        '<span class="nav-brand__label">Client Hub</span>' +
+        '<span class="nav-brand__label">Syraxx</span>' +
       '</a>' +
       '<nav class="nav-links">';
     links.forEach(function (l) {

@@ -84,22 +84,23 @@
 
   function rowHtml(j) {
     var cs = Hub.clientStatusFromStage(j.stage, j.on_hold, j.action_required);
-    var flags = '';
-    if (j.on_hold) flags += '<span class="flag flag-hold">ON HOLD</span>';
-    if (j.action_required && !j.on_hold) flags += '<span class="flag flag-action">ACTION</span>';
+    // The status pill already conveys "Action Required", so we don't repeat an
+    // ACTION flag. Only ON HOLD adds genuinely new info, so keep just that.
+    var flags = j.on_hold ? '<span class="flag flag-hold">ON HOLD</span>' : '';
     var days = Number(j.days_in_stage) || 0;
     var dayCls = days >= 7 ? 'day-pill day-hot' : (days >= 3 ? 'day-pill day-warn' : 'day-pill');
     var pill = Hub.pillClass(cs);
     var rowTint = (pill.split(' ')[1] || 'pill-inprogress').replace('pill-', 'row-');
     var chk = (j.checklist_total != null && Number(j.checklist_total) > 0)
-      ? '<br><span class="muted small">☑ ' + (j.checklist_done || 0) + '/' + j.checklist_total + '</span>' : '';
+      ? '<span class="chk-mini">☑ ' + (j.checklist_done || 0) + '/' + j.checklist_total + '</span>' : '';
     return '<tr data-id="' + esc(j.id) + '" class="' + rowTint + '">' +
       '<td><strong>' + esc(j.client_name) + '</strong><br><span class="muted small">' + esc(j.client_id) + '</span></td>' +
       '<td><span class="job-tag">' + esc(j.id) + '</span><br><span class="muted small">' + esc(j.job_type || '') + '</span></td>' +
       '<td>' + priorityPill(j.priority) + '</td>' +
       '<td class="small">' + esc(j.accountant_name || j.accountant_email || '—') + '</td>' +
       '<td class="small">' + esc(j.supervisor_name || j.supervisor_email || '—') + '</td>' +
-      '<td><span class="' + Hub.pillClass(cs) + '">' + esc(cs) + '</span>' + flags + '<br><span class="muted small">' + esc(j.stage_label) + '</span>' + chk + '</td>' +
+      '<td><div class="status-cell"><span class="' + Hub.pillClass(cs) + '">' + esc(cs) + '</span>' + flags +
+        '<span class="stage-sub">' + esc(j.stage_label) + '</span>' + chk + '</div></td>' +
       '<td><span class="' + dayCls + '">' + days + 'd</span></td>' +
       '<td>' + dueCellHtml(j) + '</td>' +
       '<td class="small next-action">' + esc(j.next_action) + '</td>' +

@@ -92,6 +92,15 @@ CREATE TABLE IF NOT EXISTS clients (
 -- Google Drive: shareable link to the client's backup folder (added post-launch; safe to re-run)
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS drive_folder_id TEXT;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS drive_folder_link TEXT;
+-- Client self-service profile fields (Syraxx Phase 1). Basic contact info only —
+-- never TFN/bank/sensitive data here. Editable by the client from the Profile page.
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS address TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS mobile TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS preferred_contact TEXT; -- 'email' | 'mobile' | 'phone'
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS dob DATE; -- date of birth (collected at client onboarding)
+-- Prevent duplicate client rows for the same email (case-insensitive). Partial so
+-- multiple NULL-email clients are still allowed.
+CREATE UNIQUE INDEX IF NOT EXISTS clients_email_lower_uidx ON clients (lower(email)) WHERE email IS NOT NULL;
 
 -- Entities belonging to a client (unique Entity ID like EN-0001)
 CREATE TABLE IF NOT EXISTS entities (
@@ -127,6 +136,8 @@ CREATE INDEX IF NOT EXISTS idx_jobs_stage ON jobs(stage);
 -- Client e-signature tracking (added post-launch; safe to re-run)
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS signed_by TEXT;
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS signed_ip TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS signed_user_agent TEXT;
 -- Job deadline (added post-launch; safe to re-run)
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS due_date DATE;
 -- Job priority (added post-launch; safe to re-run): high | normal | low
@@ -202,6 +213,8 @@ CREATE TABLE IF NOT EXISTS job_notes (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_job_notes_job ON job_notes(job_id);
+-- @mention support (Phase 2): emails of staff mentioned in the note, notified via the in-app bell.
+ALTER TABLE job_notes ADD COLUMN IF NOT EXISTS mentions TEXT[] NOT NULL DEFAULT '{}';
 
 -- Uploaded documents (metadata; file bytes stored on disk under uploads/)
 CREATE TABLE IF NOT EXISTS documents (
@@ -226,6 +239,11 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'rec
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS verified_by TEXT;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_note TEXT;
+-- Client-visibility flag (Syraxx Phase 1, Stage 5). Staff-uploaded deliverables
+-- (final returns, notices of assessment, etc.) are hidden from the client until a
+-- staff member explicitly flags them visible. A client's OWN uploads are always
+-- visible to that client regardless of this flag.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS client_visible BOOLEAN NOT NULL DEFAULT false;
 
 -- Outstanding document requests
 CREATE TABLE IF NOT EXISTS doc_requests (
@@ -240,6 +258,26 @@ CREATE TABLE IF NOT EXISTS doc_requests (
   received_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_docreq_job ON doc_requests(job_id);
+
+-- Controlled document folder tree (Syraxx Phase 1, Stage 4).
+-- A per-client tree, organised by financial year. `system` folders are the
+-- standard controlled categories seeded automatically and cannot be renamed or
+-- deleted by the client; non-system folders are client-created (within limits).
+CREATE TABLE IF NOT EXISTS doc_folders (
+  id          SERIAL PRIMARY KEY,
+  client_id   TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  parent_id   INTEGER REFERENCES doc_folders(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  year        TEXT,                    -- e.g. '2026 Tax' (financial-year grouping)
+  is_system   BOOLEAN NOT NULL DEFAULT false,
+  created_by  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_docfolders_client ON doc_folders(client_id);
+CREATE INDEX IF NOT EXISTS idx_docfolders_parent ON doc_folders(parent_id);
+-- Link an uploaded document to a folder (optional; NULL = unfiled).
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS folder_id INTEGER REFERENCES doc_folders(id) ON DELETE SET NULL;
+
 
 -- Email templates (admin editable)
 CREATE TABLE IF NOT EXISTS notification_templates (
@@ -293,4 +331,87 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value       TEXT,
   updated_by  TEXT,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Two-way secure messaging between a client and the firm (Syraxx Phase 1, Stage 6).
+-- direction: 'in'  = from client to firm; 'out' = from firm to client.
+-- sender_email is the actual author; the client UI never shows staff names, only "Syraxx".
+CREATE TABLE IF NOT EXISTS client_messages (
+  id           SERIAL PRIMARY KEY,
+  client_id    TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  job_id       TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+  direction    TEXT NOT NULL,                 -- 'in' | 'out'
+  sender_email TEXT,
+  body         TEXT NOT NULL,
+  read_by_client BOOLEAN NOT NULL DEFAULT false,
+  read_by_staff  BOOLEAN NOT NULL DEFAULT false,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cmsg_client ON client_messages(client_id);
+CREATE INDEX IF NOT EXISTS idx_cmsg_created ON client_messages(created_at);
+
+-- Appointments booked via Setmore (Syraxx Phase 1, Stage 7). We keep a local copy
+-- so the portal can show a client's upcoming/past bookings without re-querying
+-- Setmore on every page load. setmore_appt_key links back to the Setmore record.
+CREATE TABLE IF NOT EXISTS appointments (
+  id               SERIAL PRIMARY KEY,
+  client_id        TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  setmore_appt_key TEXT,
+  service_key      TEXT,
+  service_name     TEXT,
+  staff_key        TEXT,
+  staff_name       TEXT,
+  start_time       TIMESTAMPTZ NOT NULL,
+  end_time         TIMESTAMPTZ,
+  status           TEXT NOT NULL DEFAULT 'booked',  -- booked | cancelled
+  booked_by        TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_appt_client ON appointments(client_id);
+CREATE INDEX IF NOT EXISTS idx_appt_start ON appointments(start_time);
+
+-- Admin-defined stage automations (Phase 2). When a job ENTERS `stage`, run `action`.
+-- action: 'notify_client' (send an email template) | 'set_action_required' | 'clear_action_required'
+--       | 'add_note' (internal note) | 'notify_staff' (bell to a staff email)
+-- config JSON carries action params (e.g. templateKey, note text, staff email).
+-- stage_time_limit_days: if >0, a job sitting in `stage` longer than this is flagged overdue in the UI.
+CREATE TABLE IF NOT EXISTS stage_automations (
+  id            SERIAL PRIMARY KEY,
+  stage         TEXT NOT NULL,
+  action        TEXT NOT NULL,
+  config        JSONB NOT NULL DEFAULT '{}',
+  enabled       BOOLEAN NOT NULL DEFAULT true,
+  sort_order    INTEGER NOT NULL DEFAULT 0,
+  created_by    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_stage_autom_stage ON stage_automations(stage);
+-- Multi-trigger support (added post-launch; safe to re-run). trigger_type is the event that fires
+-- the rule (stage_enter | job_created | job_assigned | client_created | document_uploaded).
+-- trigger_key narrows it: the stage for stage_enter, an optional job_type for job_created, else NULL.
+ALTER TABLE stage_automations ADD COLUMN IF NOT EXISTS trigger_type TEXT NOT NULL DEFAULT 'stage_enter';
+ALTER TABLE stage_automations ADD COLUMN IF NOT EXISTS trigger_key  TEXT;
+-- Backfill existing rules: they were all stage-enter rules keyed by their stage column.
+UPDATE stage_automations SET trigger_key = stage WHERE trigger_key IS NULL AND trigger_type = 'stage_enter';
+CREATE INDEX IF NOT EXISTS idx_stage_autom_trigger ON stage_automations(trigger_type, trigger_key);
+
+
+-- Per-stage time limits (SLA). Kept separate so a stage can have a limit without any action rules.
+CREATE TABLE IF NOT EXISTS stage_limits (
+  stage       TEXT PRIMARY KEY,
+  limit_days  INTEGER NOT NULL DEFAULT 0,
+  updated_by  TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Per-account UI preferences (Phase 2). Stores non-sensitive layout config only
+-- (which dashboard widgets are shown, their order, chosen chart types). Keyed by
+-- (email, scope) so each page/feature keeps its own prefs blob. Never holds
+-- business data — purely presentation choices for the logged-in user.
+CREATE TABLE IF NOT EXISTS user_prefs (
+  email      TEXT NOT NULL,
+  scope      TEXT NOT NULL,          -- e.g. 'insights'
+  prefs      JSONB NOT NULL DEFAULT '{}',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (email, scope)
 );
