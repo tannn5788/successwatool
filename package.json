@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "db:init": "node db/init.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "check": "node --check server.js && node --check workflow.js && node --check insights.js && node --check db/init.js",
+    "test": "node qa/e2e_test.js"
   },
   "keywords": [],
   "author": "",

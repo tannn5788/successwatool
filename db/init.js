@@ -96,6 +96,9 @@ async function seedDemo() {
     await upsertUser('accountant@successwa.com', 'Accountant User', 'acct123', 'accountant');
     await upsertUser('reception@successwa.com', 'Reception User', 'recep123', 'reception');
     await upsertUser('demo@successwa.com', 'Demo Client', 'demo123', 'client');
+    // The demo client has mandatory MFA (email method) — matches the documented behavior
+    // and the e2e baseline where logging in returns {mfaRequired:true}. Idempotent.
+    await pool.query("UPDATE users SET mfa_enabled=true, mfa_method='email' WHERE email='demo@successwa.com'");
 
     // Offshore staff accounts (mapped to the accountant role). Created only if missing,
     // so passwords/roles you change later are preserved across deploys.

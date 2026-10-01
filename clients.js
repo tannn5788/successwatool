@@ -74,6 +74,7 @@
           '<div style="display:flex;gap:8px">' +
           '<button class="btn btn-ghost btn-sm" data-editclient="' + esc(c.id) + '" data-tip="Edit this client\'s name, email and phone. The email is their portal login.">Edit</button>' +
           '<button class="btn btn-ghost btn-sm" data-emailclient="' + esc(c.id) + '" data-cemail="' + esc(c.email || '') + '" data-cname="' + esc(c.name || '') + '" data-tip="Send a direct email to this client and view the email history.">Email</button>' +
+          '<button class="btn btn-ghost btn-sm" data-invoiceclient="' + esc(c.id) + '" data-cname="' + esc(c.name || '') + '" data-tip="Raise an invoice and view this client\'s billing / payment status.">Invoice</button>' +
           '<button class="btn btn-outline btn-sm" data-ent="' + esc(c.id) + '" data-tip="Add another entity (individual, company, trust) under this client.">+ Entity</button></div></div>' +
           (item.entities.length ?
             '<table class="hub-table" style="margin-top:12px"><thead><tr><th>Entity ID</th><th>Name</th><th>Type</th><th>ABN</th><th></th></tr></thead><tbody>' + ents + '</tbody></table>'
@@ -114,6 +115,11 @@
     Array.prototype.forEach.call(document.querySelectorAll('[data-emailclient]'), function (b) {
       b.addEventListener('click', function () {
         emailClientModal(b.getAttribute('data-emailclient'), b.getAttribute('data-cemail'), b.getAttribute('data-cname'));
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-invoiceclient]'), function (b) {
+      b.addEventListener('click', function () {
+        invoiceClientModal(b.getAttribute('data-invoiceclient'), b.getAttribute('data-cname'));
       });
     });
   }
@@ -170,6 +176,62 @@
       }).catch(function (e) { m.q('#emHist').innerHTML = '<span class="muted small">' + esc(e.message) + '</span>'; });
     }
     loadHist();
+  }
+
+  // ---- Invoice / billing (Payment #13/#15, record-only) ----
+  function invMoney(cents, currency) {
+    var v = (Number(cents) / 100).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return (currency === 'AUD' || !currency ? '$' : (currency + ' ')) + v;
+  }
+  function invoiceClientModal(id, name) {
+    var m = Hub.modal('Billing — ' + (name || id),
+      '<div class="field"><label>Amount (AUD)</label><input id="invAmt" type="number" min="0" step="0.01" placeholder="150.00"/></div>' +
+      '<div class="field"><label>Description</label><input id="invDesc" placeholder="e.g. 2024 individual tax return"/></div>' +
+      '<div class="field"><label>Due date (optional)</label><input id="invDue" type="date"/></div>' +
+      '<div class="modal-actions"><button class="btn btn-ghost" id="invCancel">Close</button><button class="btn btn-primary" id="invCreate">Raise invoice</button></div>' +
+      '<hr style="margin:16px 0;border:none;border-top:1px solid var(--border)"/>' +
+      '<h4 style="margin:0 0 8px">Invoices</h4><div id="invList" class="muted small">Loading…</div>');
+    m.q('#invCancel').addEventListener('click', m.close);
+    m.q('#invCreate').addEventListener('click', function () {
+      var amount = parseFloat(m.q('#invAmt').value);
+      if (!(amount > 0)) { Hub.toast('Enter a positive amount'); return; }
+      Hub.busy(m.q('#invCreate'), Nav.api('/api/clients/' + encodeURIComponent(id) + '/invoices', { method: 'POST', body: {
+        amount: amount, description: m.q('#invDesc').value.trim(), dueDate: m.q('#invDue').value || undefined } }))
+        .then(function () { Hub.toast('Invoice raised'); m.q('#invAmt').value = ''; m.q('#invDesc').value = ''; m.q('#invDue').value = ''; loadInv(); })
+        .catch(function (e) { Hub.toast(e.message); });
+    });
+    function loadInv() {
+      Nav.api('/api/clients/' + encodeURIComponent(id) + '/invoices').then(function (r) {
+        var rows = r.invoices || [];
+        if (!rows.length) { m.q('#invList').innerHTML = '<span class="muted small">No invoices yet.</span>'; return; }
+        m.q('#invList').innerHTML = rows.map(function (inv) {
+          var pill = inv.status === 'paid' ? '<span class="pill pill-completed">Paid</span>'
+            : inv.status === 'void' ? '<span class="pill">Void</span>'
+            : '<span class="pill pill-inprogress">Unpaid</span>';
+          var actions = inv.status === 'unpaid'
+            ? '<button class="btn btn-sm btn-primary" data-paid="' + inv.id + '">Mark paid</button>' +
+              '<button class="btn btn-sm btn-ghost" data-void="' + inv.id + '">Void</button>'
+            : '';
+          return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">' +
+            '<span style="flex:1"><b>' + invMoney(inv.amount_cents, inv.currency) + '</b> ' + pill +
+              '<span class="muted small" style="display:block">' + (inv.description ? esc(inv.description) + ' · ' : '') + inv.id + '</span></span>' +
+            actions + '</div>';
+        }).join('');
+        m.q('#invList').querySelectorAll('[data-paid]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            Hub.busy(b, Nav.api('/api/invoices/' + b.getAttribute('data-paid') + '/paid', { method: 'POST', body: { method: 'manual' } }))
+              .then(function () { Hub.toast('Marked paid'); loadInv(); }).catch(function (e) { Hub.toast(e.message); });
+          });
+        });
+        m.q('#invList').querySelectorAll('[data-void]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            Hub.busy(b, Nav.api('/api/invoices/' + b.getAttribute('data-void') + '/void', { method: 'POST' }))
+              .then(function () { Hub.toast('Invoice voided'); loadInv(); }).catch(function (e) { Hub.toast(e.message); });
+          });
+        });
+      }).catch(function (e) { m.q('#invList').innerHTML = '<span class="muted small">' + esc(e.message) + '</span>'; });
+    }
+    loadInv();
   }
 
   // ---- New client ----

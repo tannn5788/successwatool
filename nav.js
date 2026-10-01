@@ -79,6 +79,7 @@
         ['appointments.html', 'Appointments'],
         ['messages.html', 'Messages'],
         ['previous.html', 'Previous Work'],
+        ['billing.html', 'Billing'],
         ['profile.html', 'Profile'],
         ['help.html', 'Help'],
       ];

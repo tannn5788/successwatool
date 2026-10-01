@@ -415,3 +415,27 @@ CREATE TABLE IF NOT EXISTS user_prefs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (email, scope)
 );
+
+-- Client invoices / payment status (Phase 1 #13/#15, record-only). Staff raise an
+-- invoice (amount + due date); the client sees the amount + status and a (placeholder)
+-- Pay Now button; staff mark it paid manually. Money is stored as integer cents to
+-- avoid floating-point rounding. A real payment gateway (Stripe) can later fill
+-- paid_method/paid_ref and flip status via webhook.
+CREATE TABLE IF NOT EXISTS invoices (
+  id            TEXT PRIMARY KEY,                 -- INV-0001
+  client_id     TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  job_id        TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+  description   TEXT,
+  amount_cents  BIGINT NOT NULL CHECK (amount_cents >= 0),
+  currency      TEXT NOT NULL DEFAULT 'AUD',
+  status        TEXT NOT NULL DEFAULT 'unpaid',   -- unpaid | paid | void
+  due_date      DATE,
+  issued_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  paid_at       TIMESTAMPTZ,
+  paid_method   TEXT,                             -- e.g. 'manual' | 'stripe'
+  paid_ref      TEXT,                             -- gateway reference (future)
+  created_by    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);

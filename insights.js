@@ -9,12 +9,12 @@
   var wrap = document.getElementById('wrap');
 
   var cap = function (s) { return String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1); };
-  // Professional blue ramp (BI look). Categorical charts read as one family;
-  // only genuine error states keep a red accent.
-  var PAL = ['#1d4ed8', '#3b82f6', '#60a5fa', '#93c5fd', '#1e3a8a', '#2563eb', '#0ea5e9', '#7dd3fc'];
-  var INK = '#2563eb';
-  var PRIO = { high: '#1e3a8a', normal: '#3b82f6', low: '#93c5fd' };
-  var DOCC = { verified: '#1d4ed8', received: '#60a5fa', incorrect: '#ef4444', info_required: '#f59e0b' };
+  // Brand brass→red ramp (matches app's black/red/brass identity).
+  // Categorical charts read as one warm family; genuine error states stay red.
+  var PAL = ['#96701a', '#b8912c', '#cfa94e', '#e3c77e', '#7a2621', '#c01f2e', '#d9574a', '#eca39a'];
+  var INK = '#96701a';
+  var PRIO = { high: '#c01f2e', normal: '#b8912c', low: '#e3c77e' };
+  var DOCC = { verified: '#2f7d4f', received: '#b8912c', incorrect: '#c01f2e', info_required: '#d99a28' };
   var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   function empty() { return '<div class="chart-empty">No data yet</div>'; }
@@ -320,11 +320,54 @@
   }
 
   // ---------------- tab content builders ----------------
-  function card(title, inner, span2) {
-    return '<div class="chart-card' + (span2 ? ' span2' : '') + '"><div class="chart-title"><span>' + esc(title) + '</span></div>' + inner + '</div>';
+  function card(title, inner, span2, table) {
+    var t = table ? '<details class="ins-data"><summary>Data table</summary>' + table + '</details>' : '';
+    return '<div class="chart-card' + (span2 ? ' span2' : '') + '"><div class="chart-title"><span>' + esc(title) + '</span></div>' + inner + t + '</div>';
   }
   function sectionKpis(html) { return '<div class="ins-kpis2">' + html + '</div>'; }
   function chartsGrid(html) { return '<div class="ins-charts">' + html + '</div>'; }
+
+  // ---------------- breakdown tables (exact numbers under each chart) ----------------
+  // Single-value categorical: label · count · % of total.
+  function pctTable(rows, labelKey, valueKey, labelFn) {
+    if (!rows || !rows.length) return '';
+    var total = rows.reduce(function (s, r) { return s + (r[valueKey] || 0); }, 0) || 1;
+    var body = rows.map(function (r) {
+      var lbl = labelFn ? labelFn(r[labelKey]) : r[labelKey];
+      return '<tr><td>' + esc(String(lbl)) + '</td><td class="num">' + r[valueKey] +
+        '</td><td class="num">' + Math.round((r[valueKey] / total) * 100) + '%</td></tr>';
+    }).join('');
+    return '<table class="ins-table"><thead><tr><th>Item</th><th class="num">Count</th><th class="num">%</th></tr></thead><tbody>' + body + '</tbody></table>';
+  }
+  // Months × series (e.g. intake/completed/net).
+  function monthsTable(months, series) {
+    if (!months.length) return '';
+    var head = '<tr><th>Month</th>' + series.map(function (s) { return '<th class="num">' + esc(s.name) + '</th>'; }).join('') + '</tr>';
+    var body = months.map(function (m) {
+      return '<tr><td>' + esc(m) + '</td>' + series.map(function (s) { return '<td class="num">' + (s.data[m] || 0) + '</td>'; }).join('') + '</tr>';
+    }).join('');
+    return '<table class="ins-table"><thead>' + head + '</thead><tbody>' + body + '</tbody></table>';
+  }
+  // Stacked rows [{label, parts:[{key,val}]}] → columns per key + total.
+  function partsTable(rows) {
+    if (!rows || !rows.length) return '';
+    var keys = rows[0].parts.map(function (p) { return p.key; });
+    var head = '<tr><th>Item</th>' + keys.map(function (k) { return '<th class="num">' + esc(cap(k)) + '</th>'; }).join('') + '<th class="num">Total</th></tr>';
+    var body = rows.map(function (r) {
+      var tot = r.parts.reduce(function (s, p) { return s + p.val; }, 0);
+      return '<tr><td>' + esc(r.label) + '</td>' + r.parts.map(function (p) { return '<td class="num">' + p.val + '</td>'; }).join('') + '<td class="num">' + tot + '</td></tr>';
+    }).join('');
+    return '<table class="ins-table"><thead>' + head + '</thead><tbody>' + body + '</tbody></table>';
+  }
+  // Generic: cols = [{label, num, get(row)}].
+  function colsTable(cols, rows) {
+    if (!rows || !rows.length) return '';
+    var head = '<tr>' + cols.map(function (c) { return '<th' + (c.num ? ' class="num"' : '') + '>' + esc(c.label) + '</th>'; }).join('') + '</tr>';
+    var body = rows.map(function (r) {
+      return '<tr>' + cols.map(function (c) { return '<td' + (c.num ? ' class="num"' : '') + '>' + c.get(r) + '</td>'; }).join('') + '</tr>';
+    }).join('');
+    return '<table class="ins-table"><thead>' + head + '</thead><tbody>' + body + '</tbody></table>';
+  }
 
   function tabOverview(res) {
     var k = sectionKpis(
@@ -351,13 +394,16 @@
     var intakeData = {}, doneData = {};
     (res.intake || []).forEach(function (r) { intakeData[r.month] = r.n; });
     (res.throughput || []).forEach(function (r) { doneData[r.month] = r.n; });
+    var intakeSeries = [
+      { name: 'New jobs', data: intakeData, color: '#b8912c' },
+      { name: 'Completed', data: doneData, color: '#2f7d4f' }];
     var charts = chartsGrid(
-      card('Jobs by stage (funnel)', funnel(funnelRows)) +
-      card('Active jobs by type', donut(res.byType, 'type', 'n', null)) +
-      card('Stage × priority', stackedBar(sbRows)) +
-      card('Intake vs completed', lineChart(months, [
-        { name: 'New jobs', data: intakeData, color: '#2f65b0' },
-        { name: 'Completed', data: doneData, color: '#2f7d4f' }], { area: true }), true)
+      card('Jobs by stage (funnel)', funnel(funnelRows), false, colsTable([
+        { label: 'Stage', get: function (r) { return esc(r.label); } },
+        { label: 'Jobs', num: true, get: function (r) { return r.n; } }], funnelRows)) +
+      card('Active jobs by type', donut(res.byType, 'type', 'n', null), false, pctTable(res.byType, 'type', 'n')) +
+      card('Stage × priority', stackedBar(sbRows), false, partsTable(sbRows)) +
+      card('Intake vs completed', lineChart(months, intakeSeries, { area: true }), true, monthsTable(months, intakeSeries))
     );
     return k + charts;
   }
@@ -369,14 +415,16 @@
     (res.throughput || []).forEach(function (r) { doneData[r.month] = r.n; });
     months.forEach(function (m) { netData[m] = (intakeData[m] || 0) - (doneData[m] || 0); });
     var doneRows = months.map(function (m) { return { month: m, n: doneData[m] || 0 }; });
+    var trendSeries = [
+      { name: 'New', data: intakeData, color: '#b8912c' },
+      { name: 'Completed', data: doneData, color: '#2f7d4f' },
+      { name: 'Net', data: netData, color: '#c01f2e' }];
     var charts = chartsGrid(
-      card('Intake · completed · net', lineChart(months, [
-        { name: 'New', data: intakeData, color: '#2f65b0' },
-        { name: 'Completed', data: doneData, color: '#2f7d4f' },
-        { name: 'Net', data: netData, color: '#c01f2e' }]), true) +
-      card('Completions per month', columnChart(doneRows, 'month', 'n', function (m) { return m.slice(5); }, '#2f7d4f')) +
+      card('Intake · completed · net', lineChart(months, trendSeries), true, monthsTable(months, trendSeries)) +
+      card('Completions per month', columnChart(doneRows, 'month', 'n', function (m) { return m.slice(5); }, '#2f7d4f'), false,
+        colsTable([{ label: 'Month', get: function (r) { return esc(r.month); } }, { label: 'Completed', num: true, get: function (r) { return r.n; } }], doneRows)) +
       card('Activity by month × weekday', heatmap(res.activity, months), true) +
-      card('Jobs by financial year', lollipop(res.byYear, 'year', 'n', null))
+      card('Jobs by financial year', lollipop(res.byYear, 'year', 'n', null), false, pctTable(res.byYear, 'year', 'n'))
     );
     return charts;
   }
@@ -394,8 +442,17 @@
     }).map(function (r) { return { stage: stageShort(r.stage), days: r.days }; });
     var charts = chartsGrid(
       card('Active job age (days in stage)', histogram(res.ageHist, histLbl)) +
-      card('Cycle time by type (days)', boxPlot(res.cycleBox), true) +
-      card('Avg days per stage', barChart(stageDur, 'stage', 'days', null))
+      card('Cycle time by type (days)', boxPlot(res.cycleBox), true, colsTable([
+        { label: 'Type', get: function (r) { return esc(r.job_type); } },
+        { label: 'Min', num: true, get: function (r) { return r.min; } },
+        { label: 'Q1', num: true, get: function (r) { return r.q1; } },
+        { label: 'Median', num: true, get: function (r) { return r.median; } },
+        { label: 'Q3', num: true, get: function (r) { return r.q3; } },
+        { label: 'Max', num: true, get: function (r) { return r.max; } },
+        { label: 'Jobs', num: true, get: function (r) { return r.n; } }], res.cycleBox)) +
+      card('Avg days per stage', barChart(stageDur, 'stage', 'days', null), false, colsTable([
+        { label: 'Stage', get: function (r) { return esc(r.stage); } },
+        { label: 'Avg days', num: true, get: function (r) { return r.days; } }], stageDur))
     );
     return k + charts;
   }
@@ -421,9 +478,13 @@
       return { label: r.staff, x: r.active, y: r.total, r: r.overdue };
     });
     var charts = chartsGrid(
-      card('Active workload by staff', barChart(res.workload, 'staff', 'n')) +
-      card('Per-staff jobs by stage', stackedBar(sbRows), true) +
-      card('Staff load vs overdue', bubble(bubbleRows, 'active', 'total'))
+      card('Active workload by staff', barChart(res.workload, 'staff', 'n'), false, pctTable(res.workload, 'staff', 'n')) +
+      card('Per-staff jobs by stage', stackedBar(sbRows), true, partsTable(sbRows)) +
+      card('Staff load vs overdue', bubble(bubbleRows, 'active', 'total'), false, colsTable([
+        { label: 'Staff', get: function (r) { return esc(r.staff); } },
+        { label: 'Active', num: true, get: function (r) { return r.active; } },
+        { label: 'Total', num: true, get: function (r) { return r.total; } },
+        { label: 'Overdue', num: true, get: function (r) { return r.overdue; } }], res.staffBubble))
     );
     return charts;
   }
@@ -438,9 +499,10 @@
     var docLf = function (s) { return cap(String(s).replace('_', ' ')); };
     var outRows = (res.outstandingByStage || []).map(function (r) { return { s: stageShort(r.stage), n: r.n }; });
     var charts = chartsGrid(
-      card('Documents by status', donut(res.docsByStatus, 'status', 'n', docLf, DOCC)) +
-      card('Outstanding requests by stage', outRows.length ? columnChart(outRows, 's', 'n', null, '#b8912c') : empty()) +
-      card('Appointments by service (30d)', barChart(res.apptsByService, 'service', 'n', null))
+      card('Documents by status', donut(res.docsByStatus, 'status', 'n', docLf, DOCC), false, pctTable(res.docsByStatus, 'status', 'n', docLf)) +
+      card('Outstanding requests by stage', outRows.length ? columnChart(outRows, 's', 'n', null, '#b8912c') : empty(), false,
+        colsTable([{ label: 'Stage', get: function (r) { return esc(r.s); } }, { label: 'Pending', num: true, get: function (r) { return r.n; } }], outRows)) +
+      card('Appointments by service (30d)', barChart(res.apptsByService, 'service', 'n', null), false, pctTable(res.apptsByService, 'service', 'n'))
     );
     return k + charts;
   }

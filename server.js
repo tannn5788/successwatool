@@ -92,8 +92,23 @@ function verifyPassword(password, salt, expectedHash) {
 }
 
 const app = express();
+app.set('trust proxy', 1); // behind nginx/PM2 -> req.ip is the real client IP
 app.use(compression()); // gzip HTML/JS/CSS/JSON responses
 app.use(express.json({ limit: '20mb' }));
+
+// Baseline security headers (hand-rolled; avoids pulling in helmet for ~6 headers).
+// Blocks framing (clickjacking) + MIME sniffing, and forces HTTPS once behind TLS.
+app.use(function (req, res, next) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+// ponytail: headers set manually — upgrade to `helmet` + strict nonce CSP when inline scripts are removed.
+
 
 // Pretty URLs: redirect /foo.html -> /foo (keep the query string), so the
 // address bar never shows the .html extension. Internal links still use .html
@@ -278,11 +293,34 @@ app.post('/api/register', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Brute-force guard for login: max attempts per IP+email per rolling window.
+const LOGIN_RL_WINDOW_MS = 15 * 60 * 1000; // 15 min
+const LOGIN_RL_MAX = Number(process.env.LOGIN_RATE_MAX || 10);
+const loginHits = new Map(); // key -> [timestamps]
+function loginRateLimited(key) {
+  const now = Date.now();
+  const arr = (loginHits.get(key) || []).filter((t) => now - t < LOGIN_RL_WINDOW_MS);
+  arr.push(now);
+  loginHits.set(key, arr);
+  return arr.length > LOGIN_RL_MAX;
+}
+// Opportunistic cleanup so the map can't grow unbounded.
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, arr] of loginHits) {
+    const live = arr.filter((t) => now - t < LOGIN_RL_WINDOW_MS);
+    if (live.length) loginHits.set(k, live); else loginHits.delete(k);
+  }
+}, LOGIN_RL_WINDOW_MS).unref();
+
 // POST /api/login { email, password }
 app.post('/api/login', async (req, res) => {
   const email = normAccount(req.body.email);
   const password = String(req.body.password || '');
   if (!email || !password) return res.status(400).json({ error: 'email and password required' });
+  if (loginRateLimited(req.ip + '|' + email)) {
+    return res.status(429).json({ error: 'Too many login attempts. Please wait a few minutes and try again.' });
+  }
   try {
     const r = await pool.query(
       'SELECT email, name, role, active, pass_hash, pass_salt, mfa_enabled, mfa_method, mfa_secret FROM users WHERE email=$1',
@@ -1689,6 +1727,32 @@ app.get('/api/portal/folders', requireAuth, requireRole('client'), async (req, r
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/portal/invoices — the client's own invoices (amount + status only; no staff/internal data).
+app.get('/api/portal/invoices', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.json({ ok: true, invoices: [] });
+    const r = await pool.query(
+      `SELECT id, description, amount_cents, currency, status, due_date, issued_at, paid_at
+         FROM invoices WHERE client_id=$1 AND status <> 'void' ORDER BY issued_at DESC LIMIT 100`, [clientId]);
+    res.json({ ok: true, invoices: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portal/invoices/:id/pay — Pay Now. Online payment gateway is not wired yet,
+// so this is a placeholder that confirms the invoice is payable and tells the client how to pay.
+// ponytail: no gateway — swap this for a Stripe Checkout session + webhook that flips status to 'paid'.
+app.post('/api/portal/invoices/:id/pay', requireAuth, requireRole('client'), async (req, res) => {
+  try {
+    const clientId = await clientIdForUser(req.user.email);
+    if (!clientId) return res.status(404).json({ error: 'no client profile' });
+    const r = await pool.query('SELECT id, status FROM invoices WHERE id=$1 AND client_id=$2', [req.params.id, clientId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'invoice not found' });
+    if (r.rows[0].status === 'paid') return res.json({ ok: true, status: 'paid', message: 'This invoice is already paid.' });
+    res.json({ ok: true, status: 'unpaid', message: 'Online payment is coming soon. Please contact our office to settle this invoice.' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /api/portal/folders { parentId, name } — client creates a sub-folder (within limits).
 app.post('/api/portal/folders', requireAuth, requireRole('client'), async (req, res) => {
   try {
@@ -3080,6 +3144,95 @@ app.post('/api/clients/:id/email', requireAuth, requireRole.apply(null, STAFF), 
     const result = await sendNotification(pool, { toEmail: cr.rows[0].email, templateKey: 'client_email', rawSubject: subject, rawBody: body });
     await audit(pool, req.user.email, 'client.email_sent', 'client', req.params.id, { subject });
     res.json({ ok: true, status: result.status });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ================= INVOICES / PAYMENT (Phase 1 #13/#15, record-only) =================
+// Accountants may only touch invoices for their own clients; other staff see all.
+async function assertClientOwnedOr403(req, res, clientId) {
+  if (req.user.role === 'accountant') {
+    const own = await pool.query('SELECT 1 FROM jobs WHERE client_id=$1 AND lower(accountant_email)=lower($2) LIMIT 1', [clientId, req.user.email]);
+    if (!own.rows.length) { res.status(403).json({ error: 'You can only manage your own clients' }); return false; }
+  }
+  return true;
+}
+// Load an invoice + enforce accountant scoping via its client. Returns the row or null (response already sent).
+async function loadInvoiceOr403(req, res) {
+  const r = await pool.query('SELECT * FROM invoices WHERE id=$1', [req.params.id]);
+  if (!r.rows.length) { res.status(404).json({ error: 'invoice not found' }); return null; }
+  if (!(await assertClientOwnedOr403(req, res, r.rows[0].client_id))) return null;
+  return r.rows[0];
+}
+
+// GET /api/clients/:id/invoices — staff list a client's invoices.
+app.get('/api/clients/:id/invoices', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    if (!(await assertClientOwnedOr403(req, res, req.params.id))) return;
+    const r = await pool.query(
+      `SELECT id, job_id, description, amount_cents, currency, status, due_date, issued_at, paid_at, paid_method
+         FROM invoices WHERE client_id=$1 ORDER BY issued_at DESC LIMIT 100`, [req.params.id]);
+    res.json({ ok: true, invoices: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/clients/:id/invoices { amount, description, dueDate, jobId } — staff raise an invoice.
+// `amount` is dollars (e.g. 150 or "150.50"); stored as integer cents.
+app.post('/api/clients/:id/invoices', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    if (!(await assertClientOwnedOr403(req, res, req.params.id))) return;
+    const cr = await pool.query('SELECT id FROM clients WHERE id=$1', [req.params.id]);
+    if (!cr.rows.length) return res.status(404).json({ error: 'client not found' });
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'A positive amount is required' });
+    const amountCents = Math.round(amount * 100);
+    const description = String(req.body.description || '').trim().slice(0, 500) || null;
+    const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(req.body.dueDate || '') ? req.body.dueDate : null;
+    let jobId = String(req.body.jobId || '').trim() || null;
+    if (jobId) {
+      const jr = await pool.query('SELECT 1 FROM jobs WHERE id=$1 AND client_id=$2', [jobId, req.params.id]);
+      if (!jr.rows.length) return res.status(400).json({ error: 'jobId does not belong to this client' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const id = await nextId(client, 'invoice', 'INV-');
+      await client.query(
+        `INSERT INTO invoices (id, client_id, job_id, description, amount_cents, due_date, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, req.params.id, jobId, description, amountCents, dueDate, req.user.email]);
+      await audit(client, req.user.email, 'invoice.created', 'invoice', id, { amountCents, clientId: req.params.id });
+      await client.query('COMMIT');
+      res.json({ ok: true, id });
+    } catch (err) { await client.query('ROLLBACK'); throw err; }
+    finally { client.release(); }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/invoices/:id/paid { method, ref } — staff mark an invoice paid (manual record).
+app.post('/api/invoices/:id/paid', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    const inv = await loadInvoiceOr403(req, res);
+    if (!inv) return;
+    if (inv.status === 'paid') return res.json({ ok: true, status: 'paid' }); // idempotent
+    const method = String(req.body.method || 'manual').trim().slice(0, 40);
+    const ref = String(req.body.ref || '').trim().slice(0, 100) || null;
+    await pool.query(
+      `UPDATE invoices SET status='paid', paid_at=now(), paid_method=$2, paid_ref=$3 WHERE id=$1`,
+      [inv.id, method, ref]);
+    await audit(pool, req.user.email, 'invoice.marked_paid', 'invoice', inv.id, { method, ref });
+    res.json({ ok: true, status: 'paid' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/invoices/:id/void — staff void an invoice.
+app.post('/api/invoices/:id/void', requireAuth, requireRole.apply(null, STAFF), async (req, res) => {
+  try {
+    const inv = await loadInvoiceOr403(req, res);
+    if (!inv) return;
+    await pool.query(`UPDATE invoices SET status='void' WHERE id=$1`, [inv.id]);
+    await audit(pool, req.user.email, 'invoice.voided', 'invoice', inv.id, null);
+    res.json({ ok: true, status: 'void' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

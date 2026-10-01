@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Syntax check
+        run: npm run check
+      # e2e needs a live Postgres. Only runs when the DATABASE_URL secret is set
+      # (fork PRs without the secret skip it instead of failing the whole job).
+      - name: Boot server + run e2e
+        if: ${{ env.DATABASE_URL != '' }}
+        env:
+          PORT: '8000'
+        run: |
+          node server.js &
+          SERVER_PID=$!
+          npx --yes wait-on http://127.0.0.1:8000/login --timeout 30000
+          npm test
+          kill $SERVER_PID

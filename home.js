@@ -9,6 +9,22 @@
   var esc = Nav.esc;
   var wrap = document.getElementById('wrap');
 
+  // Inline line-icons (stroke=currentColor, matches nav style) — replaces emoji.
+  var ICONS = {
+    sign: '<path d="M3 21h18"/><path d="M15 5l4 4L8 20l-5 1 1-5z"/>',
+    doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+    upload: '<path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/>',
+    calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+    message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    megaphone: '<path d="M3 11v2a1 1 0 0 0 1 1h2l10 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M18 8a4 4 0 0 1 0 8"/>',
+    check: '<path d="M20 6L9 17l-5-5"/>'
+  };
+  function ic(name) {
+    return '<svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICONS[name] || '') + '</svg>';
+  }
+
   Hub.guide('home', auth.role, {
     client: { em: '👋', title: 'Welcome to Syraxx', text: 'This is your home base. <b>Action Required</b> shows anything we need from you. <b>Current Work</b> tracks each job\u2019s progress. Use the top menu to manage documents, appointments and messages.' },
   });
@@ -23,15 +39,15 @@
       'Action Required' + (actions.length ? ' <span class="oc-badge">' + actions.length + '</span>' : '') + '</div>';
     if (!actions.length) {
       return '<div class="card" style="margin-bottom:16px">' + head +
-        '<p class="outstanding-empty">✓ Nothing needs your attention right now.</p></div>';
+        '<p class="outstanding-empty">' + ic('check') + ' Nothing needs your attention right now.</p></div>';
     }
     var items = actions.map(function (a) {
       var go = a.type === 'sign'
         ? 'portal.html?job=' + encodeURIComponent(a.jobId)
         : 'portal.html?job=' + encodeURIComponent(a.jobId);
-      var icon = a.type === 'sign' ? '✍️' : '📄';
+      var icon = a.type === 'sign' ? ic('sign') : ic('doc');
       return '<li><span class="oi-dot"></span>' +
-        '<span><span class="oi-title">' + icon + ' ' + esc(a.label) + '</span></span>' +
+        '<span class="oi-title">' + icon + ' ' + esc(a.label) + '</span>' +
         '<a class="btn btn-primary btn-xs" href="' + go + '" style="margin-left:auto">' +
         (a.type === 'sign' ? 'Review & Sign' : 'Upload') + '</a></li>';
     }).join('');
@@ -98,22 +114,22 @@
   function announcementCard(a) {
     if (!a || (!a.title && !a.body)) return '';
     return '<div class="card" style="margin-bottom:16px;border-color:var(--gold,#e0b34d);background:var(--gold-tint,#fff8e8)">' +
-      '<div class="section-title">📣 ' + esc(a.title || 'Announcement') + '</div>' +
+      '<div class="section-title" style="display:flex;align-items:center;gap:8px">' + ic('megaphone') + '<span>' + esc(a.title || 'Announcement') + '</span></div>' +
       (a.body ? '<p class="small" style="margin:2px 0 0;white-space:pre-wrap">' + esc(a.body) + '</p>' : '') +
       '</div>';
   }
 
   function quickLinksCard() {
     var links = [
-      { href: 'documents.html', icon: '📤', label: 'Upload files' },
-      { href: 'appointments.html', icon: '📅', label: 'Book appointment' },
-      { href: 'messages.html', icon: '💬', label: 'Send a message' },
-      { href: 'previous.html', icon: '🗂️', label: 'Previous work' },
+      { href: 'documents.html', icon: 'upload', label: 'Upload files' },
+      { href: 'appointments.html', icon: 'calendar', label: 'Book appointment' },
+      { href: 'messages.html', icon: 'message', label: 'Send a message' },
+      { href: 'previous.html', icon: 'folder', label: 'Previous work' },
     ];
     var rows = links.map(function (l) {
       return '<a class="ql-link" href="' + l.href + '" ' +
         'style="display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--border);text-decoration:none;color:inherit">' +
-        '<span>' + l.icon + '</span><span class="small"><b>' + esc(l.label) + '</b></span>' +
+        ic(l.icon) + '<span class="small"><b>' + esc(l.label) + '</b></span>' +
         '<span style="margin-left:auto;color:var(--muted)">›</span></a>';
     }).join('');
     return '<div class="card" style="margin-bottom:16px">' +
